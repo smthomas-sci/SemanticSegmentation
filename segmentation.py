@@ -1,7 +1,8 @@
 """
 
-Preipares data for training
-
+A custom generator class (+ associated classes) for performing
+model.fit_genertor() method in Keras. This is specifically used
+for segementation ground truth labels.
 
 Date: 24/10/18
 Author: Simon Thomas
@@ -128,10 +129,12 @@ class SegmentationGen(object):
 
             # load X-image
             im = io.imread(os.path.join(X_dir, fname + ".jpg"))
+            im = resize(im, (self.dim, self.dim))
             X_batch.append(im)
 
             # Load y-image ----------------- ||
             im = io.imread(os.path.join(y_dir, fname + ".png"))
+            im = resize(im, (self.dim, self.dim))
             # Convert to 3D ground truth
             y = np.zeros((im.shape[0], im.shape[1], self.num_classes),
                                     dtype=np.float32)
@@ -259,7 +262,7 @@ def buildModel():
 # Test
 if __name__ == "__main__":
 
-    #model = buildModel()
+    model = buildModel()
 
 
     # ------------------------------------------------------------------ #
@@ -284,28 +287,16 @@ if __name__ == "__main__":
     gen = SegmentationGen(batch_size, X_dir, y_dir, palette, dim = 512)
 
     # Test loop
-    X_train, y_train = next(gen)
-    print(X_train.shape, y_train.shape)
+    #X_train, y_train = next(gen)
+    #print(X_train.shape, y_train.shape)
 
 
-
-    print("end.")
-
-
-#
-#history = model.fit_generator(
-#         train_generator,
-#         steps_per_epoch = T_spe,
-#         epochs = 50,
-#         validation_data = validation_generator,
-#         validation_steps = V_spe,
-#         callbacks = callback_list
-#
-# X, y = test_generator.next()
-
-#model.fit_generator(generator=training_generator,
-#                validation_data=validation_generator,
-#                use_multiprocessing=True,
-#                workers=6)
+    history = model.fit_generator(
+                    generator=gen,
+                    steps_per_epoch = gen.n // batch_size,
+                    epochs = 5,
+                    use_multiprocessing=True,
+                    workers=6
+                    )
 
 
