@@ -283,6 +283,36 @@ class SegmentationGen(object):
             return None
 
 
+def predictImage(model, image):
+    """
+    Simplifies image prediction for segmentation models. Automatically
+    reshapes output so it can be visualised.
+
+    Input:
+        model - CNN keras mode
+        image - rgb image of shape (dim, dim, 3) where dim == model.input_shape
+
+    Output:
+        preds - probability heatmap of shape (dim, dim, num_classes)
+        class_img - argmax of preds of shape (dim, dim, 1)
+    """
+    # Reshape
+    x = image[np.newaxis, ::]
+
+    # Standardise range
+    x = x.astype(np.float32) / 255.
+
+    # Prediction
+    preds = model.predict(x)[0].reshape(image.shape[0],
+                                           image.shape[0],
+                                           model.layers[-1].output_shape[-1])
+    # class_img
+    class_img = np.argmax(preds, axis=-1)
+
+    return (preds, class_img)
+
+
+
 # -------------------------- #
 # Build a demo model to test #
 # -------------------------- #
@@ -392,6 +422,17 @@ if __name__ == "__main__":
         steps = 2)
 
     print("Val Loss:", loss, ", Val Acc:", acc)
+
+
+    # Predict raw image
+    im = io.imread(os.path.join(X_dir, "1.jpg"))
+    im = resize(im, (dim, dim))
+    preds, class_img = predictImage(model, im)
+
+    plt.imshow(class_img)
+    plt.show()
+
+
 
 
 
