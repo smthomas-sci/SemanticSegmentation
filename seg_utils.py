@@ -1,11 +1,10 @@
 """
 
-A custom generator class (+ associated classes) for performing
-model.fit_genertor() method in Keras. This is specifically used
-for segementation ground truth labels. It requires sample weights
-to be used.
-
-See: https://github.com/keras-team/keras/issues/3653
+A collection of classes and functions for training fully-convolutional
+CNNs for semantic segmentation. Includes a custom generator class for
+performing model.fit_genertor() method in Keras. This is specifically used
+for segementation ground truth labels which requires sample weights
+to be used. (See https://github.com/keras-team/keras/issues/3653)
 
 Author: Simon Thomas
 Email: simon.thomas@uq.edu.au
@@ -372,7 +371,7 @@ if __name__ == "__main__":
 
 
     #   Directory Setup
-    base_dir = "../."
+    base_dir = "./Demo_Images/"
     train_dir = os.path.join(base_dir, "train")
     test_dir = os.path.join(base_dir, "test")
     X_dir = os.path.join(train_dir, "img")
