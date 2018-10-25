@@ -15,20 +15,12 @@ Last Update: 25/10/18
 
 """
 
-from numpy.random import seed
-seed(1)
-from tensorflow import set_random_seed
-set_random_seed(2)
-
-
 import numpy as np
 from skimage import io
 import os
 from cv2 import resize
 from sklearn.utils.class_weight import compute_class_weight
 
-
-# Colours
 
 class Palette(object):
     """
@@ -39,6 +31,12 @@ class Palette(object):
         """
         Takes and order list of colours and stores in dictionary
         format.
+
+        Input:
+            orderd_list - list of rgb tuples in class order
+
+        Output:
+            self[index] - rgb tuple associated with index/class
         """
 
         self.colors = dict((i, color) for (i, color) in enumerate(ordered_list))
@@ -66,9 +64,42 @@ class Palette(object):
 
 class SegmentationGen(object):
     """
-    A generator that returns X and y data in designated batch sizes,
-    specifically for segmentation problems. It converts y images into
-    3D arrays where n-dim = number of classes.
+    A generator that returns X, y & sampe_weight data in designated batch sizes,
+    specifically for segmentation problems. It converts y images 2D arrays
+    to work with sample_weights which are calculated on the fly for each batch.
+
+    The output predictions are in shape (batch_size, dim*dim*, num_classes)
+    and therefore need to be reshaped inorder to be interpreted / visualised.
+
+    Validation needs to be done separately due to implementation differences
+    with keras, but remains fairly straight forward.
+
+    Training is very sensitive to batchsize and traininging rate.
+
+    See again:  https://github.com/keras-team/keras/issues/3653
+
+    Example:
+
+        >>> colours = [(0,0,255),(0,255,0),(255,0,0)]
+        >>> palette = Palette(colours)
+        >>> batch_size = 10
+        >>> dim = 128
+        >>> train_gen = SegmentationGen(batch_size, X_dir, y_dir, palette,
+        ...                        x_dim=dim, y_dim=dim)
+        >>> # Compile mode - include sampe_weights_mode="temporal"
+        ... model.compile(  optimizer=SGD(lr=0.001),
+        ...                 loss="categorical_crossentropy",
+        ...                 sample_weight_mode="temporal",
+        ...                 metrics=["accuracy"])
+        >>> # Train
+        ... history = model.fit_generator(
+        ...                 generator = train_gen,
+        ...                 steps_per_epoch = train_gen.n // batch_size)
+        >>> # Evaluate
+        ... loss, acc = model.evaluate_generator(
+        ...                 generator = val_gen,
+        ...                 steps = 2)
+
 
     Input:
         batch_size - number of images in a batch
@@ -97,7 +128,6 @@ class SegmentationGen(object):
         self.n = len(self.files)
         self.cur = 0
         self.order = list(range(self.n))
-        # Randomise the order in which the files are loaded
         np.random.shuffle(self.order)
 
 
@@ -167,19 +197,6 @@ class SegmentationGen(object):
         # Calculate sample weights
         weights = self._calculateWeights(y_train)
 
-
-        # ORIGINAL - KEEP 
-        # Set sample_weights to their weights
-        # shape : (N of images, dim*dim, num_classes)
-        #sample_weights = np.ones((y_train.shape[0],
-        #                          self.y_dim*self.y_dim,
-        #                          self.num_classes))
-
-
-        # Multiply each output channel with the corresponding class weight
-        #for i in range(self.num_classes):
-        #    sample_weights[:,:,i] *= weights[i]
-        # --------------------------------------------------------------- #
 
         # Take weight for each correct position
         sample_weights = np.take(weights, np.argmax(y_train, axis=-1))
@@ -266,80 +283,66 @@ class SegmentationGen(object):
             return None
 
 
-# BUILD MODEL
-def buildModel():
+# -------------------------- #
+# Build a demo model to test #
+# -------------------------- #
+def demoModel(dim, num_classes):
     """
-    Builds a simple encoder decoder network
+    Builds a simple encoder decoder network - don't be too impresssed!
     """
     import numpy as np
     from keras.models import Sequential, Model
-    from keras.layers import Input, Dropout, Permute
+    from keras.layers import Input
     from keras.layers import Conv2D, ZeroPadding2D, MaxPooling2D, Conv2DTranspose, Cropping2D
     from keras.layers import concatenate, UpSampling2D, Reshape
     import keras.backend as K
 
-    from keras.optimizers import SGD
-    from keras import backend as keras
-    from keras.regularizers import l1, l2
-
-    from keras.activations import softmax
-
-    # Custom softmax
-    def softmaxLastAxis(x):
-        return softmax(x, axis=-1)
-
     # Build model
-    dim = 256
     input_image = Input(shape=(dim, dim, 3))
 
-    block1_conv1 = Conv2D(12, (3, 3),
-                          activation='relu',
-                          padding='same',name='block1_conv1')(input_image)
+    conv = Conv2D(24, (3, 3), activation='relu', padding='same')(input_image)
 
-    block1_pool = MaxPooling2D((2, 2), strides=(2, 2),
-                               name="block1_pool")(block1_conv1)
+    pool = MaxPooling2D((2, 2), strides=(2, 2), name="pool")(conv)
 
-    fc7 = Conv2D(12, (1, 1), padding='same', activation='relu',
-                             name='fc7')(block1_pool)
-    #score = Conv2D(3, (1, 1), padding='same', activation="softmax",
-     #            name='score')(fc7)
+    conv1x1 = Conv2D(24, (1, 1), padding='same', activation='relu')(pool)
 
-    # Upsampling - Decoder starts here...
-    up1 = UpSampling2D(size=(2,2))(fc7)
-    up1_conv =  Conv2D(12, 2, activation = 'relu', padding = 'same',
-                 kernel_initializer = 'he_normal')(up1)
-    merge1 = concatenate([block1_conv1,up1_conv], axis = 3)
+    up = UpSampling2D(size=(2,2))(conv1x1)
+    up_conv =  Conv2D(24, 2, activation = 'relu', padding = 'same')(up)
+    merge = concatenate([conv,up_conv], axis = 3)
 
-    conv1 = Conv2D(12, 3, activation = 'relu', padding = 'same',
-                   kernel_initializer = 'he_normal')(merge1)
+    conv = Conv2D(12, 3, activation = 'relu', padding = 'same')(merge)
 
-    output = Conv2D(3, (1, 1), activation = "softmax")(conv1)
+    x = Conv2D(num_classes, (1, 1), activation = "softmax")(conv)
 
-    # need to reshape for training - Output needs to be reshaped after
-    reshape = Reshape((dim*dim, 3))(output)
+    # need to reshape for training
+    output = Reshape((dim*dim, 3))(x)
 
-    model = Model(inputs=[input_image], outputs=reshape)
+    model = Model(inputs=[input_image], outputs=output)
 
     model.summary()
 
     return model
 
 
-# ---------------------------------------------------------------------------------# 
-
-# Test
+# ---- #
+# DEMO #
+# ---- #
 if __name__ == "__main__":
 
+    # SET RANDOM SEED ---- |
+    from numpy.random import seed
+    seed(1)
+    from tensorflow import set_random_seed
+    set_random_seed(2)
+    # -------------------- |
 
     from keras.optimizers import SGD
-    import tensorflow as tf 
+    import tensorflow as tf
     import matplotlib.pyplot as plt
 
-    # Create Test Model
-    model = buildModel()
 
     #   Directory Setup
-    base_dir = "/home/simon/Documents/PhD/Data/EarPen/"
+    base_dir = "../."
     train_dir = os.path.join(base_dir, "train")
     test_dir = os.path.join(base_dir, "test")
     X_dir = os.path.join(train_dir, "img")
@@ -354,80 +357,41 @@ if __name__ == "__main__":
     colours = [(17,16,16),(0,255,0),(255,0,0)]
     palette = Palette(colours)
 
-    dim = 256
+    # Model parameters
+    num_classes = len(palette)
+    dim = 128
+
     # Create Generators 
     train_gen = SegmentationGen(batch_size, X_dir, y_dir, palette,
                                 x_dim=dim, y_dim=dim)
     val_gen = SegmentationGen(batch_size, X_val_dir, y_val_dir,
                               palette,x_dim=dim, y_dim=dim)
 
-    #X_train, y_train, sample_weights = train_gen.next()
+    # build demo model
+    model = demoModel(dim, num_classes)
 
-    #X_train, y_train, sample_weights = val_gen.next()
-
-    #im = np.argmax(y_train, axis=-1)
-    #plt.imshow(im)
-    #plt.show()
-
-    #print(X_train.shape, y_train.shape, sample_weights.shape)
-
-    #print(np.max(sample_weights))
+    # Load best model from before
+    model.load_weights("best_model.h5")
 
 
+    # Compile mode - include sampe_weights_mode="temporal"
+    model.compile(optimizer=SGD(
+            lr=0.001),
+            loss="categorical_crossentropy",
+            sample_weight_mode="temporal",
+            metrics=["accuracy"])
 
-    # Compile model for training - need sample_weight_mode for Segmentation!
-    model.compile(optimizer=SGD(lr=0.1), loss="categorical_crossentropy",
-                                metrics =["accuracy"],
-                                sample_weight_mode="temporal")
-    plots = []
+    # Train
+    history = model.fit_generator(
+        generator = train_gen,
+        steps_per_epoch = train_gen.n // batch_size)
 
-    epochs = 23
+    # Evaluate
+    loss, acc = model.evaluate_generator(
+        generator = val_gen,
+        steps = 2)
 
-    for i in range(epochs):
-        print("Epoch", i+1, "of", epochs)
-        # Train Model
-        history = model.fit_generator(
-                    generator = train_gen,
-                    steps_per_epoch = train_gen.n // batch_size,
-                    epochs = 1,
-
-                    )
-
-        # Evaluate Model
-        loss, acc = model.evaluate_generator(val_gen, steps=1)
-
-        print("Model Evaluation")
-        print("Loss:", loss, ", Acc:", acc)
-
-        # Check Segmentations
-        preds = model.predict_generator(val_gen, steps=1)
-
-        print(preds.shape)
-
-        # Grab an image
-        im = preds[1]
-
-
-        im = im.reshape(dim, dim, len(palette))
-
-        # class predictinos
-        class_preds = np.argmax(im, axis=-1)
-
-        plots.append(class_preds)
-
-
-    #plot progress
-    fig, axs = plt.subplots(5, 10, figsize=(15, 6), facecolor="w", edgecolor="k")
-    fig.subplots_adjust(hspace = 0.5, wspace=0.001)
-
-    axs = axs.ravel()
-    import matplotlib.pyplot as plt
-
-    for i in range(epochs):
-        axs[i].imshow(plots[i])
-    plt.show()
-
-
+    print("Val Loss:", loss, ", Val Acc:", acc)
 
 
 
