@@ -2,21 +2,18 @@
 
 A custom generator class (+ associated classes) for performing
 model.fit_genertor() method in Keras. This is specifically used
-for segementation ground truth labels.
+for segementation ground truth labels. It requires sample weights
+to be used.
 
-Date: 24/10/18
+See: https://github.com/keras-team/keras/issues/3653
+
 Author: Simon Thomas
 Email: simon.thomas@uq.edu.au
 
+Start Date: 24/10/18
+Last Update: 25/10/18
+
 """
-
-
-
-from numpy.random import seed
-seed(1)
-from tensorflow import set_random_seed
-set_random_seed(2)
-
 
 from numpy.random import seed
 seed(1)
@@ -28,6 +25,8 @@ import numpy as np
 from skimage import io
 import os
 from cv2 import resize
+from sklearn.utils.class_weight import compute_class_weight
+
 
 # Colours
 
@@ -165,8 +164,61 @@ class SegmentationGen(object):
         X_train = np.stack(X_batch, axis=0).astype(np.float32) / 255;
         y_train = np.stack(y_batch, axis=0)
 
-        return (X_train, y_train)
+        # Calculate sample weights
+        weights = self._calculateWeights(y_train)
 
+
+        # ORIGINAL - KEEP 
+        # Set sample_weights to their weights
+        # shape : (N of images, dim*dim, num_classes)
+        #sample_weights = np.ones((y_train.shape[0],
+        #                          self.y_dim*self.y_dim,
+        #                          self.num_classes))
+
+
+        # Multiply each output channel with the corresponding class weight
+        #for i in range(self.num_classes):
+        #    sample_weights[:,:,i] *= weights[i]
+        # --------------------------------------------------------------- #
+
+        # Take weight for each correct position
+        sample_weights = np.take(weights, np.argmax(y_train, axis=-1))
+
+        # Reshape to suit keras
+        sample_weights = sample_weights.reshape(y_train.shape[0], self.y_dim*self.y_dim)
+        y_train = y_train.reshape(y_train.shape[0], self.y_dim*self.y_dim,
+                                  self.num_classes)
+
+        return (X_train, y_train, sample_weights)
+
+    def _calculateWeights(self, y_train):
+        """
+        Calculates the balanced weights of all the classes
+        in the batch.
+
+        Input:
+            y_train - (dim, dim,num_classes) ground truth
+
+        Ouput:
+            weights - a list of the weights for each class
+        """
+        class_counts = []
+        # loop through each class
+        for i in range(self.num_classes):
+            batch_count = 0
+            # Sum up each class count in each batch image
+            for b in range(y_train.shape[0]):
+                batch_count += np.sum(y_train[b][:,:,i])
+            class_counts.append(batch_count)
+
+        # create Counts
+        y = []
+        for i in range(self.num_classes):
+            y.extend([i]*int(class_counts[i]))
+        # Calcualte weights
+        weights = compute_class_weight("balanced", list(range(self.num_classes)), y)
+
+        return weights
 
     def __iter__(self):
         return self
@@ -187,9 +239,9 @@ class SegmentationGen(object):
             self.cur += self.batch_size
 
             # create Batches
-            X_train, y_train = self.createBatches(positions)
+            X_train, y_train, sample_weights = self.createBatches(positions)
 
-            return X_train, y_train
+            return X_train, y_train, sample_weights
 
         # Final batch is smaller than batch_size
         if self.cur < self.n:
@@ -199,9 +251,9 @@ class SegmentationGen(object):
             self.cur = self.n
 
             # Create Batches
-            X_train, y_train = self.createBatches(positions)
+            X_train, y_train, sample_weights = self.createBatches(positions)
 
-            return X_train, y_train
+            return X_train, y_train, sample_weights
 
         else:
             # reshuffle order for next batch
@@ -223,21 +275,24 @@ def buildModel():
     from keras.models import Sequential, Model
     from keras.layers import Input, Dropout, Permute
     from keras.layers import Conv2D, ZeroPadding2D, MaxPooling2D, Conv2DTranspose, Cropping2D
-    from keras.layers import concatenate, UpSampling2D
+    from keras.layers import concatenate, UpSampling2D, Reshape
     import keras.backend as K
 
     from keras.optimizers import SGD
     from keras import backend as keras
     from keras.regularizers import l1, l2
 
+    from keras.activations import softmax
+
+    # Custom softmax
+    def softmaxLastAxis(x):
+        return softmax(x, axis=-1)
 
     # Build model
-    dim = 512
+    dim = 256
     input_image = Input(shape=(dim, dim, 3))
 
     block1_conv1 = Conv2D(12, (3, 3),
-                          kernel_regularizer=l2(0.01),
-                          activity_regularizer=l1(0.01),
                           activation='relu',
                           padding='same',name='block1_conv1')(input_image)
 
@@ -245,26 +300,25 @@ def buildModel():
                                name="block1_pool")(block1_conv1)
 
     fc7 = Conv2D(12, (1, 1), padding='same', activation='relu',
-                             kernel_regularizer=l2(0.001),
-                             activity_regularizer=l1(0.001),
                              name='fc7')(block1_pool)
-    score = Conv2D(3, (1, 1), padding='same', activation='softmax',
-                           kernel_regularizer=l2(0.001),
-                          activity_regularizer=l1(0.001),
-                 name='score')(fc7)
+    #score = Conv2D(3, (1, 1), padding='same', activation="softmax",
+     #            name='score')(fc7)
 
     # Upsampling - Decoder starts here...
-    #up1 = UpSampling2D(size=(2,2))(fc7)
-    #up1_conv =  Conv2D(12, 2, activation = 'relu', padding = 'same',
-    #             kernel_initializer = 'he_normal')(up1)
-    #merge1 = concatenate([block1_conv1,up1_conv], axis = 3)
-#
-    #conv1 = Conv2D(12, 3, activation = 'relu', padding = 'same',
-    #               kernel_initializer = 'he_normal')(merge1)
+    up1 = UpSampling2D(size=(2,2))(fc7)
+    up1_conv =  Conv2D(12, 2, activation = 'relu', padding = 'same',
+                 kernel_initializer = 'he_normal')(up1)
+    merge1 = concatenate([block1_conv1,up1_conv], axis = 3)
 
-    #output = Conv2D(3, (1, 1), activation = "softmax")(conv1)
+    conv1 = Conv2D(12, 3, activation = 'relu', padding = 'same',
+                   kernel_initializer = 'he_normal')(merge1)
 
-    model = Model(inputs=[input_image], outputs=score)
+    output = Conv2D(3, (1, 1), activation = "softmax")(conv1)
+
+    # need to reshape for training - Output needs to be reshaped after
+    reshape = Reshape((dim*dim, 3))(output)
+
+    model = Model(inputs=[input_image], outputs=reshape)
 
     model.summary()
 
@@ -278,6 +332,8 @@ if __name__ == "__main__":
 
 
     from keras.optimizers import SGD
+    import tensorflow as tf 
+    import matplotlib.pyplot as plt
 
     # Create Test Model
     model = buildModel()
@@ -295,52 +351,64 @@ if __name__ == "__main__":
     batch_size = 10
 
     # Color Palette
-    colours = [(0,0,0),(0,255,0),(255,0,0)]
-    #colours = [(0,255,0), (255,0,0)]
+    colours = [(17,16,16),(0,255,0),(255,0,0)]
     palette = Palette(colours)
 
-    dim = 512
+    dim = 256
     # Create Generators 
-    train_gen = SegmentationGen(batch_size, X_dir, y_dir, palette, x_dim=dim,
-                                y_dim=dim//2)
+    train_gen = SegmentationGen(batch_size, X_dir, y_dir, palette,
+                                x_dim=dim, y_dim=dim)
     val_gen = SegmentationGen(batch_size, X_val_dir, y_val_dir,
-                              palette,x_dim=dim, y_dim=dim//2)
+                              palette,x_dim=dim, y_dim=dim)
+
+    #X_train, y_train, sample_weights = train_gen.next()
+
+    #X_train, y_train, sample_weights = val_gen.next()
+
+    #im = np.argmax(y_train, axis=-1)
+    #plt.imshow(im)
+    #plt.show()
+
+    #print(X_train.shape, y_train.shape, sample_weights.shape)
+
+    #print(np.max(sample_weights))
 
 
-    # Compile model for training
-    model.compile(optimizer=SGD(lr=0.0001), loss="categorical_crossentropy",
-                                metrics = ["accuracy"])
 
-
-    import matplotlib.pyplot as plt
-
+    # Compile model for training - need sample_weight_mode for Segmentation!
+    model.compile(optimizer=SGD(lr=0.1), loss="categorical_crossentropy",
+                                metrics =["accuracy"],
+                                sample_weight_mode="temporal")
     plots = []
 
-    epochs = 10
+    epochs = 23
 
     for i in range(epochs):
-        
         print("Epoch", i+1, "of", epochs)
         # Train Model
         history = model.fit_generator(
                     generator = train_gen,
                     steps_per_epoch = train_gen.n // batch_size,
-                    epochs = 1
+                    epochs = 1,
+
                     )
 
         # Evaluate Model
-        loss, acc = model.evaluate_generator(val_gen, steps=2)
-
+        loss, acc = model.evaluate_generator(val_gen, steps=1)
 
         print("Model Evaluation")
         print("Loss:", loss, ", Acc:", acc)
 
-
         # Check Segmentations
-        preds = model.predict_generator(val_gen, steps=2)
+        preds = model.predict_generator(val_gen, steps=1)
+
+        print(preds.shape)
 
         # Grab an image
         im = preds[1]
+
+
+        im = im.reshape(dim, dim, len(palette))
 
         # class predictinos
         class_preds = np.argmax(im, axis=-1)
@@ -349,10 +417,11 @@ if __name__ == "__main__":
 
 
     #plot progress
-    fig, axs = plt.subplots(2, 5, figsize=(15, 6), facecolor="w", edgecolor="k")
+    fig, axs = plt.subplots(5, 10, figsize=(15, 6), facecolor="w", edgecolor="k")
     fig.subplots_adjust(hspace = 0.5, wspace=0.001)
 
     axs = axs.ravel()
+    import matplotlib.pyplot as plt
 
     for i in range(epochs):
         axs[i].imshow(plots[i])
