@@ -32,7 +32,7 @@ class Palette(object):
         format.
 
         Input:
-            orderd_list - list of rgb tuples in class order
+            ordered_list - list of rgb tuples in class order
 
         Output:
             self[index] - rgb tuple associated with index/class
@@ -44,7 +44,7 @@ class Palette(object):
         """
         Returns item with input key, i.e. channel
         """
-        return colours[arg]
+        return self.colors[arg]
 
 
     def __str__(self):
@@ -109,6 +109,7 @@ class SegmentationGen(object):
                 obtained from the LUT of come standard segmentaiton datasets.
         dim - batches require images to be stacked so for
                 batch_size > 1 image_size is required.
+        suffix - the image type in the raw images. Default is ".png"
 
     Output:
         using the global next() function or internal next() function the class
@@ -116,13 +117,16 @@ class SegmentationGen(object):
             X_train.shape = (batch_size, image_size, dim, 3)
             y_train.shape = (batch_size, image_size, dim, num_classes)
     """
-    def __init__(self, batch_size, X_dir, y_dir, palette, x_dim, y_dim):
+    def __init__(self, batch_size, X_dir, y_dir, palette, x_dim, y_dim,
+                 suffix=".png"):
         self.batch_size = batch_size
         self.X_dir = X_dir
         self.y_dir = y_dir
         self.files = os.listdir(X_dir)
+        self.palette = palette
         self.x_dim = x_dim
         self.y_dim = y_dim
+        self.suffix = suffix
         self.num_classes = len(palette)
         self.n = len(self.files)
         self.cur = 0
@@ -143,12 +147,17 @@ class SegmentationGen(object):
         Output:
             mask - binary mask
         """
-        r, g, b = rgb
-        r_mask = im[:,:, 0] == r
-        g_mask = im[:,:, 1] == g
-        b_mask = im[:,:, 2] == b
-        mask = r_mask & g_mask & b_mask
-        return mask
+        # Colour mask
+        if len(rgb) == 3:
+            r, g, b = rgb
+            r_mask = im[:,:, 0] == r
+            g_mask = im[:,:, 1] == g
+            b_mask = im[:,:, 2] == b
+            mask = r_mask & g_mask & b_mask
+            return mask
+        # 8-bit mask
+        return im[:,:] == rgb
+
 
     def createBatches(self, positions):
         """
@@ -171,7 +180,7 @@ class SegmentationGen(object):
             fname = self.files[pos][:-4]
 
             # load X-image
-            im = io.imread(os.path.join(self.X_dir, fname + ".jpg"))
+            im = io.imread(os.path.join(self.X_dir, fname + self.suffix))
             im = resize(im, (self.x_dim, self.x_dim))
             X_batch.append(im)
 
@@ -183,7 +192,7 @@ class SegmentationGen(object):
                                     dtype=np.float32)
             # Loop through colors in palette and assign to new array
             for i in range(self.num_classes):
-                rgb = palette[i]
+                rgb = self.palette[i]
                 mask = self.getClassMask(rgb, im)
                 y[mask, i] = 1.
 
@@ -341,10 +350,10 @@ def demoModel(dim, num_classes):
 
     conv = Conv2D(12, 3, activation = 'relu', padding = 'same')(merge)
 
-    x = Conv2D(num_classes, (1, 1), activation = "softmax")(conv)
+    activation = Conv2D(num_classes, (1, 1), activation = "softmax")(conv)
 
     # need to reshape for training
-    output = Reshape((dim*dim, 3))(x)
+    output = Reshape((dim*dim, 3))(activation)
 
     model = Model(inputs=[input_image], outputs=output)
 
@@ -392,9 +401,9 @@ if __name__ == "__main__":
 
     # Create Generators 
     train_gen = SegmentationGen(batch_size, X_dir, y_dir, palette,
-                                x_dim=dim, y_dim=dim)
+                                x_dim=dim, y_dim=dim, suffix=".jpg")
     val_gen = SegmentationGen(batch_size, X_val_dir, y_val_dir,
-                              palette,x_dim=dim, y_dim=dim)
+                              palette,x_dim=dim, y_dim=dim, suffix=".jpg")
 
     # build demo model
     model = demoModel(dim, num_classes)
@@ -403,7 +412,7 @@ if __name__ == "__main__":
     model.load_weights("best_model.h5")
 
 
-    # Compile mode - include sampe_weights_mode="temporal"
+    # Compile model - include sampe_weights_mode="temporal"
     model.compile(optimizer=SGD(
             lr=0.001),
             loss="categorical_crossentropy",
@@ -412,6 +421,7 @@ if __name__ == "__main__":
 
     # Train
     history = model.fit_generator(
+        epochs = 2,
         generator = train_gen,
         steps_per_epoch = train_gen.n // batch_size)
 
