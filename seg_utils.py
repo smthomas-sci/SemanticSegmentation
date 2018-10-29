@@ -239,6 +239,9 @@ class SegmentationGen(object):
         # create Counts
         y = []
         for i in range(self.num_classes):
+            # Adjusts for absense
+            if class_counts[i] == 0:
+                class_counts[i] = 1
             y.extend([i]*int(class_counts[i]))
         # Calcualte weights
         weights = compute_class_weight("balanced", list(range(self.num_classes)), y)
