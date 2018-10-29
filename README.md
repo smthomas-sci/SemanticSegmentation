@@ -1,7 +1,7 @@
 # SemanticSegmentation
 
 ## VGG16 + U-Net decoder
-Results from a 2-class segmentation problem of histology images.
+Results from a 2-class segmentation problem of histology images trained for 2 epochs and no optimization.
 
 <div style="text-align: center">
 <img src="./assets/input.png" width="200">
