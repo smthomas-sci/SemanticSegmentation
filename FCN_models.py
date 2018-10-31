@@ -173,14 +173,112 @@ def VGG_UNet(dim, num_classes, channels=3):
 
     return model
 
+def ResNet_UNet(dim, num_classes):
+    """
+    Returns a ResNet50 Nework with a U-Net
+    like upsampling stage. Inlcudes 3 skip connections
+    from previous VGG layers.
+
+    Input:
+        dim - the size of the input image. Note that is should be
+              a square of 2 so that downsampling and upsampling
+              always match. ie. 128 -> 64 -> 32 -> 64 -> 128
+
+        num_classes - the number of classes in the whole problem. Used to
+                      determine the dimension of output map. i.e. model.predict()
+                      returns array that can be reshaped to (dim, dim,
+                      num_classes).
+
+        channels - number of channels in input image. Defaut of 3 for RGB
+
+    Output:
+        model - an uncompiled keras model. Check output shape before use.
+
+
+    """
+    import keras.backend as K
+    from keras.models import Sequential, Model
+    from keras.layers import Input, Dropout, Permute
+    from keras.layers import Conv2D, ZeroPadding2D, MaxPooling2D, Conv2DTranspose, Cropping2D
+    from keras.layers import UpSampling2D, Reshape, concatenate
+    from keras.applications.resnet50 import ResNet50
+
+    # Import a headless VGG16
+    resnet = ResNet50(input_shape = (dim, dim, 3), include_top=False)
+
+    # Attached U-net from second last layer - activation_49
+    res_out = resnet.layers[-2].output
+
+    # Upsampling 1
+    up1 = UpSampling2D(size=(2,2))(res_out)
+    up1_conv = Conv2D(512, 2, activation = 'relu', padding = 'same',
+                 kernel_initializer = 'he_normal')(up1)
+
+    prev_layer = resnet.get_layer("activation_40").output
+    merge1 = concatenate([prev_layer,up1_conv], axis = 3)
+    merge1_conv1 = Conv2D(512, 3, activation = 'relu', padding = 'same',
+                   kernel_initializer = 'he_normal')(merge1)
+    merge1_conv2 = Conv2D(512, 3, activation = 'relu', padding = 'same',
+                   kernel_initializer = 'he_normal')(merge1_conv1)
+
+    # Upsampling 2
+    up2 = UpSampling2D(size = (2,2))(merge1_conv2)
+    up2_conv = Conv2D(256, 2, activation = 'relu', padding = 'same',
+                 kernel_initializer = 'he_normal')(up2)
+    prev_layer = resnet.get_layer("activation_22").output
+    merge2 = concatenate([prev_layer,up2_conv], axis = 3)
+    merge2_conv1 = Conv2D(256, 3, activation = 'relu', padding = 'same',
+                   kernel_initializer = 'he_normal')(merge2)
+    merge2_conv2 = Conv2D(256, 3, activation = 'relu', padding = 'same',
+                   kernel_initializer = 'he_normal')(merge2_conv1)
+
+    # Upsampling 3 & 4
+    up3 = UpSampling2D(size = (2,2))(merge2_conv2)
+    up3_conv1 = Conv2D(128, 2, activation = 'relu', padding = 'same',
+                 kernel_initializer = 'he_normal')(up3)
+    up3_conv2 = Conv2D(128, 2, activation = 'relu', padding = 'same',
+                 kernel_initializer = 'he_normal')(up3_conv1)
+    up4 = UpSampling2D(size = (2,2))(up3_conv2)
+    up4_conv = Conv2D(128, 2, activation = 'relu', padding = 'same',
+                 kernel_initializer = 'he_normal')(up4)
+    prev_layer = resnet.get_layer("activation_1").output
+    merge3 = concatenate([prev_layer,up4_conv], axis = 3)
+    merge3_conv1 = Conv2D(256, 3, activation = 'relu', padding = 'same',
+                   kernel_initializer = 'he_normal')(merge3)
+    merge3_conv2 = Conv2D(256, 3, activation = 'relu', padding = 'same',
+                   kernel_initializer = 'he_normal')(merge3_conv1)
+
+    # Upsample 5
+    up5 = UpSampling2D(size = (2,2))(merge3_conv2)
+    up5_conv = Conv2D(64, 2, activation = 'relu', padding = 'same',
+                  kernel_initializer = 'he_normal')(up5)
+    merge5_conv1 = Conv2D(64, 3, activation = 'relu', padding = 'same',
+                    kernel_initializer = 'he_normal')(up5_conv)
+    merge5_conv2 = Conv2D(64, 3, activation = 'relu', padding = 'same',
+                    kernel_initializer = 'he_normal')(merge5_conv1)
+
+    # Activation and reshape for training
+    activation = Conv2D(num_classes, 1, activation = "softmax")(merge5_conv2)
+    output = Reshape((dim*dim, num_classes))(activation)
+
+
+    # Build model
+    model = Model(inputs=[resnet.input], outputs=[output])
+
+    return model
+
+
 
 
 if __name__ == "__main__":
 
     dim = 512
     num_classes = 20
-    model = VGG_UNet(dim, num_classes)
+    #model = VGG_UNet(dim, num_classes)
+    #model.summary()
+    model = ResNet_UNet(dim, num_classes)
     model.summary()
+
 
 
 

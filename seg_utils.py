@@ -19,6 +19,7 @@ from skimage import io
 import os
 from cv2 import resize
 from sklearn.utils.class_weight import compute_class_weight
+import matplotlib.colors as cols
 
 
 class Palette(object):
@@ -110,6 +111,9 @@ class SegmentationGen(object):
         dim - batches require images to be stacked so for
                 batch_size > 1 image_size is required.
         suffix - the image type in the raw images. Default is ".png"
+        weight_mod -  a dictionary to modify certain weights by index
+                      i.e. weight_mod = {0 : 1.02} increases weight 0 by 2%.
+                      Default is None. 
 
     Output:
         using the global next() function or internal next() function the class
@@ -118,7 +122,7 @@ class SegmentationGen(object):
             y_train.shape = (batch_size, image_size, dim, num_classes)
     """
     def __init__(self, batch_size, X_dir, y_dir, palette, x_dim, y_dim,
-                 suffix=".png"):
+                 suffix=".png", weight_mod = None):
         self.batch_size = batch_size
         self.X_dir = X_dir
         self.y_dir = y_dir
@@ -127,6 +131,7 @@ class SegmentationGen(object):
         self.x_dim = x_dim
         self.y_dim = y_dim
         self.suffix = suffix
+        self.weight_mod = weight_mod
         self.num_classes = len(palette)
         self.n = len(self.files)
         self.cur = 0
@@ -204,7 +209,10 @@ class SegmentationGen(object):
 
         # Calculate sample weights
         weights = self._calculateWeights(y_train)
-
+        # Modify weights
+        if self.weight_mod:
+            for i in self.weight_mod:
+                weights[i] *= self.weight_mod[i]
 
         # Take weight for each correct position
         sample_weights = np.take(weights, np.argmax(y_train, axis=-1))
@@ -323,6 +331,24 @@ def predictImage(model, image):
     return (preds, class_img)
 
 
+def getColorMap(colors):
+    """
+    Returns a matplotlib color map of the list of RGB values
+
+    Input:
+        colors - a list of RGB colors
+
+    Output:
+        cmap -  a matplotlib color map object
+    """
+    # Normalise RGBs
+    norm_colors = []
+    for color in colors:
+        norm_colors.append([val / 255. for val in color])
+    # create color map
+    cmap = cols.ListedColormap(norm_colors)
+
+    return cmap
 
 # -------------------------- #
 # Build a demo model to test #
