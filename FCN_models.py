@@ -173,7 +173,7 @@ def VGG_UNet(dim, num_classes, channels=3):
 
     return model
 
-def ResNet_UNet(dim, num_classes):
+def ResNet_UNet(input_shape, dim, num_classes):
     """
     Returns a ResNet50 Nework with a U-Net
     like upsampling stage. Inlcudes 3 skip connections
@@ -204,7 +204,7 @@ def ResNet_UNet(dim, num_classes):
     from keras.applications.resnet50 import ResNet50
 
     # Import a headless VGG16
-    resnet = ResNet50(input_shape = (dim, dim, 3), include_top=False)
+    resnet = ResNet50(input_shape = (None, None, 3), include_top=False)
 
     # Attached U-net from second last layer - activation_49
     res_out = resnet.layers[-2].output
