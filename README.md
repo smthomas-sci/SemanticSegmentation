@@ -17,5 +17,5 @@
 <img src="./assets/Pred_6D.png" width="200">
 </div>
 
-
+<span style="color:red">Note: known problem with predictImage() not fixed</span>
 
