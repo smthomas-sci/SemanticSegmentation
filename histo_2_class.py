@@ -12,7 +12,7 @@ Start Date: 26/10/18
 """
 
 
-from seg_utils import *
+from seg_utils_old import *
 from FCN_models import VGG_UNet
 from keras.optimizers import *
 import matplotlib.pyplot as plt

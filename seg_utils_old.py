@@ -61,7 +61,8 @@ class Palette(object):
         return len(self.colors.keys())
 
 
-def segmentationGen(batch_size, X_dir, y_dir, palette, x_dim, y_dim, suffix=".png", weight_mod = None):
+
+class SegmentationGen(object):
     """
     A generator that returns X, y & sampe_weight data in designated batch sizes,
     specifically for segmentation problems. It converts y images 2D arrays
@@ -93,12 +94,10 @@ def segmentationGen(batch_size, X_dir, y_dir, palette, x_dim, y_dim, suffix=".pn
         >>> # Train
         ... history = model.fit_generator(
         ...                 generator = train_gen,
-        ...                 steps_per_epoch = train_n // batch_size
-        ...                 validation_data = val_gen,
-        ...                 validation_steps = val_n // batch_size )
+        ...                 steps_per_epoch = train_gen.n // batch_size)
         >>> # Evaluate
         ... loss, acc = model.evaluate_generator(
-        ...                 generator = test_gen,
+        ...                 generator = val_gen,
         ...                 steps = 2)
 
 
@@ -122,8 +121,25 @@ def segmentationGen(batch_size, X_dir, y_dir, palette, x_dim, y_dim, suffix=".pn
             X_train.shape = (batch_size, image_size, dim, 3)
             y_train.shape = (batch_size, image_size, dim, num_classes)
     """
-    # Helper functions
-    def _getClassMask(rgb, im):
+    def __init__(self, batch_size, X_dir, y_dir, palette, x_dim, y_dim,
+                 suffix=".png", weight_mod = None):
+        self.batch_size = batch_size
+        self.X_dir = X_dir
+        self.y_dir = y_dir
+        self.files = os.listdir(X_dir)
+        self.palette = palette
+        self.x_dim = x_dim
+        self.y_dim = y_dim
+        self.suffix = suffix
+        self.weight_mod = weight_mod
+        self.num_classes = len(palette)
+        self.n = len(self.files)
+        self.cur = 0
+        self.order = list(range(self.n))
+        np.random.shuffle(self.order)
+
+
+    def getClassMask(self, rgb, im):
         """
         Takes an rgb tuple and returns a binary mask of size
         im.shape[0] x im.shape[1] indicated where each color
@@ -147,7 +163,8 @@ def segmentationGen(batch_size, X_dir, y_dir, palette, x_dim, y_dim, suffix=".pn
         # 8-bit mask
         return im[:,:] == rgb
 
-    def _createBatches(positions):
+
+    def createBatches(self, positions):
         """
         Creates X_train and y_train batches from the given
         positions i.e. files in the directory
@@ -165,23 +182,23 @@ def segmentationGen(batch_size, X_dir, y_dir, palette, x_dim, y_dim, suffix=".pn
         # Loop through current batch
         for pos in positions:
             # Get image name
-            fname = files[pos][:-4]
+            fname = self.files[pos][:-4]
 
             # load X-image
-            im = io.imread(os.path.join(X_dir, fname + suffix))
-            im = resize(im, (x_dim, x_dim))
+            im = io.imread(os.path.join(self.X_dir, fname + self.suffix))
+            im = resize(im, (self.x_dim, self.x_dim))
             X_batch.append(im)
 
             # Load y-image ----------------- ||
-            im = io.imread(os.path.join(y_dir, fname + ".png"))
-            im = resize(im, (y_dim, y_dim))
+            im = io.imread(os.path.join(self.y_dir, fname + ".png"))
+            im = resize(im, (self.y_dim, self.y_dim))
             # Convert to 3D ground truth
-            y = np.zeros((im.shape[0], im.shape[1], num_classes),
+            y = np.zeros((im.shape[0], im.shape[1], self.num_classes),
                                     dtype=np.float32)
             # Loop through colors in palette and assign to new array
-            for i in range(num_classes):
-                rgb = palette[i]
-                mask = _getClassMask(rgb, im)
+            for i in range(self.num_classes):
+                rgb = self.palette[i]
+                mask = self.getClassMask(rgb, im)
                 y[mask, i] = 1.
 
             y_batch.append(y)
@@ -191,23 +208,23 @@ def segmentationGen(batch_size, X_dir, y_dir, palette, x_dim, y_dim, suffix=".pn
         y_train = np.stack(y_batch, axis=0)
 
         # Calculate sample weights
-        weights = _calculateWeights(y_train)
+        weights = self._calculateWeights(y_train)
         # Modify weights
-        if weight_mod:
-            for i in weight_mod:
-                weights[i] *= weight_mod[i]
+        if self.weight_mod:
+            for i in self.weight_mod:
+                weights[i] *= self.weight_mod[i]
 
         # Take weight for each correct position
         sample_weights = np.take(weights, np.argmax(y_train, axis=-1))
 
         # Reshape to suit keras
-        sample_weights = sample_weights.reshape(y_train.shape[0], y_dim*y_dim)
-        y_train = y_train.reshape(y_train.shape[0], y_dim*y_dim,
-                                  num_classes)
+        sample_weights = sample_weights.reshape(y_train.shape[0], self.y_dim*self.y_dim)
+        y_train = y_train.reshape(y_train.shape[0], self.y_dim*self.y_dim,
+                                  self.num_classes)
 
         return (X_train, y_train, sample_weights)
 
-    def _calculateWeights(y_train):
+    def _calculateWeights(self, y_train):
         """
         Calculates the balanced weights of all the classes
         in the batch.
@@ -220,7 +237,7 @@ def segmentationGen(batch_size, X_dir, y_dir, palette, x_dim, y_dim, suffix=".pn
         """
         class_counts = []
         # loop through each class
-        for i in range(num_classes):
+        for i in range(self.num_classes):
             batch_count = 0
             # Sum up each class count in each batch image
             for b in range(y_train.shape[0]):
@@ -229,53 +246,59 @@ def segmentationGen(batch_size, X_dir, y_dir, palette, x_dim, y_dim, suffix=".pn
 
         # create Counts
         y = []
-        for i in range(num_classes):
+        for i in range(self.num_classes):
             # Adjusts for absense
             if class_counts[i] == 0:
                 class_counts[i] = 1
             y.extend([i]*int(class_counts[i]))
-        # Calculate weights
-        weights = compute_class_weight("balanced", list(range(num_classes)), y)
+        # Calcualte weights
+        weights = compute_class_weight("balanced", list(range(self.num_classes)), y)
 
         return weights
 
-    # RUN
-    files = os.listdir(X_dir)
-    num_classes = len(palette)
-    n = len(files)
-    cur = 0
-    order = list(range(n))
-    np.random.shuffle(order)
+    def __iter__(self):
+        return self
 
-    while True:
-        # Reset
-        if cur == n:
-            np.random.shuffle(order)
-            cur = 0
+
+    def __next__(self):
+        return self.next()
+
+    def next(self):
+        """
+        Returns the next X_train and y_train arrays.
+        """
+        if self.cur >= self.n:
+            # Restart position
+            self.cur = 0
+            # reshuffle order for next batch
+            np.random.shuffle(self.order)
 
         # Most batches will be equal to batch_size
-        if cur < (n - batch_size):
+        if self.cur < (self.n - self.batch_size):
             # Get positions of files in batch
-            positions = order[cur:cur + batch_size]
+            positions = self.order[self.cur:self.cur + self.batch_size]
 
-            cur += batch_size
+            self.cur += self.batch_size
 
             # create Batches
-            X_train, y_train, sample_weights = _createBatches(positions)
+            X_train, y_train, sample_weights = self.createBatches(positions)
 
-            yield (X_train, y_train, sample_weights)
+            #return X_train, y_train, sample_weights
+            return (X_train, y_train, sample_weights)
 
         # Final batch is smaller than batch_size
+        #if self.cur < self.n:
         else:
-            positions = order[cur::]
+            positions = self.order[self.cur::]
 
             # Step is maximum - next will return None
-            cur = n
+            self.cur = self.n
 
             # Create Batches
-            X_train, y_train, sample_weights = _createBatches(positions)
+            X_train, y_train, sample_weights = self.createBatches(positions)
 
-            yield (X_train, y_train, sample_weights)
+            #return X_train, y_train, sample_weights
+            return (X_train, y_train, sample_weights)
 
 
 def predictImage(model, image):
@@ -380,10 +403,11 @@ if __name__ == "__main__":
     # -------------------- |
 
     from keras.optimizers import SGD
+    import tensorflow as tf
     import matplotlib.pyplot as plt
 
 
-    # Directory Setup
+    #   Directory Setup
     base_dir = "./Demo_Images/"
     train_dir = os.path.join(base_dir, "train")
     test_dir = os.path.join(base_dir, "test")
@@ -393,7 +417,7 @@ if __name__ == "__main__":
     y_val_dir = os.path.join(test_dir, "tag")
 
     # Batch Size
-    batch_size = 5
+    batch_size = 10
 
     # Color Palette
     colours = [(17,16,16),(0,255,0),(255,0,0)]
@@ -404,13 +428,17 @@ if __name__ == "__main__":
     dim = 128
 
     # Create Generators 
-    train_gen = segmentationGen(batch_size, X_dir, y_dir, palette,
+    train_gen = SegmentationGen(batch_size, X_dir, y_dir, palette,
                                 x_dim=dim, y_dim=dim, suffix=".jpg")
-    val_gen = segmentationGen(batch_size, X_val_dir, y_val_dir,
+    val_gen = SegmentationGen(batch_size, X_val_dir, y_val_dir,
                               palette,x_dim=dim, y_dim=dim, suffix=".jpg")
 
     # build demo model
     model = demoModel(dim, num_classes)
+
+    # Load best model from before
+    #model.load_weights("best_model.h5")
+
 
     # Compile model - include sampe_weights_mode="temporal"
     model.compile(optimizer=SGD(
@@ -421,11 +449,20 @@ if __name__ == "__main__":
 
     # Train
     history = model.fit_generator(
-        epochs=5,
-        generator=train_gen,
-        steps_per_epoch=20 // batch_size,
-        validation_data=val_gen,
-        validation_steps=2)
+        epochs = 2,
+        generator = train_gen,
+        steps_per_epoch = train_gen.n // batch_size
+    )
+        #validation_data = val_gen,
+        #validation_steps = 2)
+
+    # Evaluate
+    loss, acc = model.evaluate_generator(
+        generator = val_gen,
+        steps = 2)
+
+    print("Val Loss:", loss, ", Val Acc:", acc)
+
 
     # Predict raw image
     im = io.imread(os.path.join(X_dir, "1.jpg"))
@@ -434,6 +471,7 @@ if __name__ == "__main__":
 
     plt.imshow(class_img)
     plt.show()
+
 
 
 
