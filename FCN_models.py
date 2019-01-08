@@ -173,7 +173,7 @@ def VGG_UNet(dim, num_classes, channels=3):
 
     return model
 
-def ResNet_UNet(input_shape, dim, num_classes):
+def ResNet_UNet(dim=512, num_classes=6):
     """
     Returns a ResNet50 Nework with a U-Net
     like upsampling stage. Inlcudes 3 skip connections
@@ -183,13 +183,12 @@ def ResNet_UNet(input_shape, dim, num_classes):
         dim - the size of the input image. Note that is should be
               a square of 2 so that downsampling and upsampling
               always match. ie. 128 -> 64 -> 32 -> 64 -> 128
+              This is only needed for training.
 
         num_classes - the number of classes in the whole problem. Used to
                       determine the dimension of output map. i.e. model.predict()
                       returns array that can be reshaped to (dim, dim,
                       num_classes).
-
-        channels - number of channels in input image. Defaut of 3 for RGB
 
     Output:
         model - an uncompiled keras model. Check output shape before use.
@@ -203,7 +202,7 @@ def ResNet_UNet(input_shape, dim, num_classes):
     from keras.layers import UpSampling2D, Reshape, concatenate
     from keras.applications.resnet50 import ResNet50
 
-    # Import a headless VGG16
+    # Import a headless ResNet50
     resnet = ResNet50(input_shape = (None, None, 3), include_top=False)
 
     # Attached U-net from second last layer - activation_49
