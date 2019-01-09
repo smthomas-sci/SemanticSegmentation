@@ -13,7 +13,7 @@ Last Update: 31/10/18
 
 
 from seg_utils import *
-from FCN_models import ResNet_UNet
+from seg_models import ResNet_UNet
 from keras.optimizers import *
 import matplotlib.pyplot as plt
 

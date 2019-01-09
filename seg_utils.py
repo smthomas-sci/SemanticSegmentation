@@ -33,9 +33,11 @@ class Palette(object):
         format.
 
         Input:
+
             ordered_list - list of rgb tuples in class order
 
         Output:
+
             self[index] - rgb tuple associated with index/class
         """
 
@@ -103,15 +105,22 @@ def segmentationGen(batch_size, X_dir, y_dir, palette, x_dim, y_dim, suffix=".pn
 
 
     Input:
+
         batch_size - number of images in a batch
+
         X_dir - full path directory of training images
+
         y_dir - full path directory of training labels
+
         palette - color palette object where each index (range(n-classes))
                 is the class colour from the segmented ground truth. Get be
                 obtained from the LUT of come standard segmentaiton datasets.
+
         dim - batches require images to be stacked so for
                 batch_size > 1 image_size is required.
+
         suffix - the image type in the raw images. Default is ".png"
+
         weight_mod -  a dictionary to modify certain weights by index
                       i.e. weight_mod = {0 : 1.02} increases weight 0 by 2%.
                       Default is None. 
@@ -131,6 +140,7 @@ def segmentationGen(batch_size, X_dir, y_dir, palette, x_dim, y_dim, suffix=".pn
 
         Input:
             rgb - tuple of (r, g, b)
+
             im - segmentation ground truth image
 
         Output:
@@ -230,7 +240,7 @@ def segmentationGen(batch_size, X_dir, y_dir, palette, x_dim, y_dim, suffix=".pn
         # create Counts
         y = []
         for i in range(num_classes):
-            # Adjusts for absense
+            # Adjusts for absence
             if class_counts[i] == 0:
                 class_counts[i] = 1
             y.extend([i]*int(class_counts[i]))
@@ -284,27 +294,30 @@ def predictImage(model, image):
     reshapes output so it can be visualised.
 
     Input:
-        model - CNN keras mode
+
+        model - CNN keras model
+
         image - rgb image of shape (dim, dim, 3) where dim == model.input_shape
+                image should already be pre-processed using load_image() function.
 
     Output:
+
         preds - probability heatmap of shape (dim, dim, num_classes)
+
         class_img - argmax of preds of shape (dim, dim, 1)
     """
-    # Reshape
+    # Add new axis to conform to model input
     x = image[np.newaxis, ::]
 
-    # Standardise range
-    x = x.astype(np.float32) / 255.
-
     # Prediction
-    preds = model.predict(x)[0].reshape(image.shape[0],
-                                           image.shape[0],
-                                           model.layers[-1].output_shape[-1])
+    preds = model.predict(x)[0].reshape(
+                                    image.shape[0],
+                                    image.shape[0],
+                                    model.layers[-1].output_shape[-1])
     # class_img
     class_img = np.argmax(preds, axis=-1)
 
-    return (preds, class_img)
+    return preds, class_img
 
 
 def getColorMap(colors):
@@ -312,9 +325,11 @@ def getColorMap(colors):
     Returns a matplotlib color map of the list of RGB values
 
     Input:
+
         colors - a list of RGB colors
 
     Output:
+
         cmap -  a matplotlib color map object
     """
     # Normalise RGBs
@@ -325,6 +340,77 @@ def getColorMap(colors):
     cmap = cols.ListedColormap(norm_colors)
 
     return cmap
+
+
+def load_image(fname, pre=True):
+    """
+    Loads an image, with optional resize and pre-processing
+    for ResNet50.
+
+    Input:
+
+        fname - path + name of file to load
+
+        pre - whether to pre-process image
+
+    Output:
+
+        im - image as numpy array
+    """
+    im = io.imread(fname).astype("float32")
+    if pre:
+        im = im / 255.
+    return im
+
+
+def set_weights_for_training(model, fine_tune, layer_num = 150):
+    """
+    Takes a model and a training state i.e. fine_tune = True
+    and sets weights accordingly.
+
+    Input:
+
+        model - ResNet_UNet model
+
+        fine_tune - bool to signify training state
+
+        layer_num - layer to lock/unlock from
+
+    Output:
+
+        None
+    """
+    if not fine_tune:
+        print("[INFO] base model...")
+        # ResNet layers
+        for layer in model.layers[0:layer_num]:
+            layer.trainable = False
+        # UNet layers
+        for layer in model.layers[layer_num::]:
+            layer.trainable = True
+    else:
+        print("[INFO] fine tuning model...")
+        # ResNet layers
+        for layer in model.layers[0:layer_num]:
+            layer.trainable = True
+        # UNet layers
+        for layer in model.layers[layer_num::]:
+            layer.trainable = True
+
+
+def get_number_of_images(dir):
+    """
+    Returns number of files in given directory
+
+    Input:
+
+        dir - full path of directory
+
+    Output:
+
+        number of files in directory
+    """
+    return len([name for name in os.listdir(dir) if os.path.isfile(os.path.join(dir, name))])
 
 # -------------------------- #
 # Build a demo model to test #

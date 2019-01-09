@@ -22,6 +22,7 @@ def VGG_UNet(dim, num_classes, channels=3):
     from previous VGG layers.
 
     Input:
+
         dim - the size of the input image. Note that is should be
               a square of 2 so that downsampling and upsampling
               always match. ie. 128 -> 64 -> 32 -> 64 -> 128
@@ -34,6 +35,7 @@ def VGG_UNet(dim, num_classes, channels=3):
         channels - number of channels in input image. Defaut of 3 for RGB
 
     Output:
+
         model - an uncompied keras model. Check output shape before use.
 
     """
@@ -180,6 +182,7 @@ def ResNet_UNet(dim=512, num_classes=6):
     from previous VGG layers.
 
     Input:
+
         dim - the size of the input image. Note that is should be
               a square of 2 so that downsampling and upsampling
               always match. ie. 128 -> 64 -> 32 -> 64 -> 128
@@ -191,6 +194,7 @@ def ResNet_UNet(dim=512, num_classes=6):
                       num_classes).
 
     Output:
+
         model - an uncompiled keras model. Check output shape before use.
 
 
