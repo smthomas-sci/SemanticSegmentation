@@ -7,7 +7,12 @@ Author: Simon Thomas
 Email: simon.thomas@uq.edu.au
 
 Start Date: 09/01/19
-Last Update: 09/01/19
+Last Update: 11/01/19
+
+    Python v3.6:
+        For less than 12 classes the python interpreter must be >=3.6. This is purely
+        to ensure that dictionary.keys() returns the items in the original order
+        as per update described https://docs.python.org/3/whatsnew/3.6.html#whatsnew36-compactdict
 
     Data:
         The data directory should include the following subdirectories and each should
@@ -18,6 +23,15 @@ Last Update: 09/01/19
         --dim 512 --num_classes 12 --gpus 1  --log_dir ./logs/ --data data/ \
         --fine_tune --weights ./weights/BS_1_PS_512_C_12_FT_True_E_10_LR_0.001.h5
 
+
+    Known Errors:
+        BatchNoralisation layers, of which ResNet has many, apply different
+        normalisations between training and predict/evaluation time. Need
+        to consider this when evaluating as loss/acc can under-perform
+        just because the data is not passed through the network in the same
+        way. K.learning_phase(1) sets BN layers to use training time mean and
+        stdev during predict/evaluate calls. Temporary fix.
+
 """
 
 import argparse
@@ -25,7 +39,8 @@ import argparse
 import tensorflow as tf
 from keras.optimizers import Adam
 from keras.utils.training_utils import multi_gpu_model
-from keras.callbacks import TensorBoard
+from keras.callbacks import TensorBoard, ModelCheckpoint
+import keras.backend as K
 
 from seg_utils import *
 from seg_models import ResNet_UNet
@@ -66,11 +81,13 @@ fine_tune = args.fine_tune
 log_dir = args.log_dir
 data_dir = args.data_dir
 output_dir = args.output_dir
+classes = args.classes
 
 # Create unique run name
-run_name = "BS_" + str(batch_size) + "_PS_" + str(dim) + \
-           "_C_" + str(num_classes) + "_FT_" + str(fine_tune) + \
-           "_E_" + str(epochs) + "_LR_" + str(learning_rate)
+run_name = str(data_dir.split("/")[-2]) + "_BS_" + str(batch_size) + \
+           "_PS_" + str(dim) + "_C_" + str(num_classes) + \
+           "_FT_" + str(fine_tune) + "_E_" + str(epochs) + \
+           "_LR_" + str(learning_rate)
 
 print("Run:", run_name)
 
@@ -88,25 +105,30 @@ X_val_dir = os.path.join(data_dir, "X_val")
 y_val_dir = os.path.join(data_dir, "y_val")
 val_n = get_number_of_images(X_val_dir)
 # test
-X_test_dir = os.path.join(data_dir, "X_test")
-y_test_dir = os.path.join(data_dir, "y_test")
-test_n = get_number_of_images(X_test_dir)
+#X_test_dir = os.path.join(data_dir, "X_test")
+#y_test_dir = os.path.join(data_dir, "y_test")
+#test_n = get_number_of_images(X_test_dir)
 
 # Create color palette
-colors = [
-        [73, 0, 106],       # EPI
-        [108, 0, 115],      # GLD
-        [145, 1, 122],      # INF
-        [181, 9, 130],      # RET
-        [216, 47, 148],     # FOL
-        [236, 85, 157],     # PAP
-        [254, 246, 242],    # HYP
-        [248, 123, 168],    # KER
-        [0, 0, 0],          # BKG
-        [127, 255, 255],    # BCC
-        [127, 255, 142],    # SCC
-        [255, 127, 127]     # IEC
-]
+color_dict = {
+    "EPI":  [73, 0, 106],
+    "GLD":  [108, 0, 115],
+    "INF":  [145, 1, 122],
+    "RET":  [181, 9, 130],
+    "FOL":  [216, 47, 148],
+    "PAP":  [236, 85, 157],
+    "HYP":  [254, 246, 242],
+    "KER":  [248, 123, 168],
+    "BKG":  [0, 0, 0],
+    "BCC":  [127, 255, 255],
+    "SCC":  [127, 255, 142],
+    "IEC":  [255, 127, 127]
+}
+
+# Set up colors to match classes
+if not classes:
+    colors = [color_dict[key] for key in color_dict.keys()]
+
 palette = Palette(colors)
 
 # Create generators
@@ -122,11 +144,11 @@ val_gen = segmentationGen(
                 x_dim=dim, y_dim=dim
                 )
 
-test_gen = segmentationGen(
-                batch_size, X_test_dir,
-                y_test_dir, palette,
-                x_dim=dim, y_dim=dim
-                )
+#test_gen = segmentationGen(
+#                batch_size, X_test_dir,
+#                y_test_dir, palette,
+#                x_dim=dim, y_dim=dim
+#                )
 
 
 if gpus > 1:
@@ -161,7 +183,6 @@ else:
     # Lock / unlock weights for training
     set_weights_for_training(model, fine_tune)
 
-
 # Compile model for training
 model.compile(
             optimizer=Adam(lr=learning_rate),
@@ -171,7 +192,21 @@ model.compile(
             )
 
 # Create Tensorboard Callbacks
-callback_list = [TensorBoard(log_dir=log_dir + "/" + run_name)]
+weight_path = "./weights/" + run_name + "_checkpoint_{epoch:04d}-{val_acc:.2f}.h5"
+
+callback_list = [
+                    TensorBoard(log_dir=log_dir + "/" + run_name),
+        
+                    ModelCheckpoint(
+                                    weight_path,
+                                    monitor='val_acc',
+                                    verbose=1,
+                                    save_best_only=False,
+                                    mode='auto',
+                                    save_weights_only=True,
+                                    period=5 # save every 10 epochs
+                                    )
+                ]
 
 # Train
 history = model.fit_generator(
@@ -179,24 +214,25 @@ history = model.fit_generator(
                         generator=train_gen,
                         steps_per_epoch=train_n // batch_size,
                         validation_data=val_gen,
-                        validation_steps=val_n // batch_size,
+                        validation_steps=(val_n / 4) // batch_size,     # 1/4 of data
                         callbacks=callback_list
                         )
 
-# Save weights
-weight_path = "./weights/" + run_name + ".h5"
+# Save final weights
+weight_path = "./weights/" + run_name + "_final.h5"
 print("Saving weights as:", weight_path)
 if gpus > 1:
     orig_model.save_weights(weight_path)
 else:
     model.save_weights(weight_path)
 
-# Evaluate
+# Final Evaluation - Switch to training mode
+K.training_phase(1)
 loss, acc = model.evaluate_generator(
-                    generator=test_gen,
-                    steps=test_n // batch_size
+                    generator=val_gen,
+                    steps=val_n // batch_size
                     )
-print("Test set evaluation - Loss:", loss, "Acc:", acc)
+print("Validation set evaluation - Loss:", loss, "Acc:", acc)
 
 
 
