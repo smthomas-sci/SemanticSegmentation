@@ -10,7 +10,7 @@ Author: Simon Thomas
 Email: simon.thomas@uq.edu.au
 
 Start Date: 24/10/18
-Last Update: 07/01/19
+Last Update: 17/01/19
 
 """
 
@@ -20,9 +20,15 @@ from sys import stderr
 import h5py
 import os
 from cv2 import resize
+
+from keras.callbacks import Callback
+
 from sklearn.utils.class_weight import compute_class_weight
+
+from pandas_ml import ConfusionMatrix
+
 import matplotlib.colors as cols
-from keras.layers import BatchNormalization
+from matplotlib.pyplot import Normalize
 
 
 class Palette(object):
@@ -172,6 +178,47 @@ def segmentationGen(
         # 8-bit mask
         return im[:,:] == rgb
 
+
+
+    def _calculateWeights(y_train):
+        """
+        Calculates the balanced weights of all the classes
+        in the batch.
+
+        Input:
+            y_train - (dim, dim,num_classes) ground truth
+
+        Ouput:
+            weights - a list of the weights for each class
+        """
+        class_counts = []
+        # loop through each class
+        for i in range(num_classes):
+            batch_count = 0
+            # Sum up each class count in each batch image
+            for b in range(y_train.shape[0]):
+                batch_count += np.sum(y_train[b][:,:,i])
+            class_counts.append(batch_count)
+
+        # create Counts
+        y = []
+        present_classes = []
+        absent_classes = []
+        for i in range(num_classes):
+            # Adjusts for absence
+            if class_counts[i] == 0:
+                absent_classes.append(i)
+                continue
+            else:
+                present_classes.append(i)
+                y.extend([i]*int(class_counts[i]))
+        # Calculate weights
+        weights = compute_class_weight("balanced", present_classes, y)
+        for c in absent_classes:
+            weights = np.insert(weights, c, 0)
+
+        return weights
+
     def _createBatches(positions):
         """
         Creates X_train and y_train batches from the given
@@ -216,59 +263,32 @@ def segmentationGen(
 
         # Calculate sample weights
         weights = _calculateWeights(y_train)
-        # Modify weights
-        if weight_mod:
-            for i in weight_mod:
-                weights[i] *= weight_mod[i]
+        # # Modify weights
+        # if weight_mod:
+        #     for i in weight_mod:
+        #         weights[i] = weight_mod[i] #*= weight_mod[i]
 
+        #print("Weights:", weights)
         # Take weight for each correct position
         sample_weights = np.take(weights, np.argmax(y_train, axis=-1))
 
         # Reshape to suit keras
         sample_weights = sample_weights.reshape(y_train.shape[0], y_dim*y_dim)
-        y_train = y_train.reshape(y_train.shape[0], y_dim*y_dim,
+        y_train = y_train.reshape(y_train.shape[0],
+                                  y_dim*y_dim,
                                   num_classes)
 
         return X_train, y_train, sample_weights
 
-    def _calculateWeights(y_train):
-        """
-        Calculates the balanced weights of all the classes
-        in the batch.
-
-        Input:
-            y_train - (dim, dim,num_classes) ground truth
-
-        Ouput:
-            weights - a list of the weights for each class
-        """
-        class_counts = []
-        # loop through each class
-        for i in range(num_classes):
-            batch_count = 0
-            # Sum up each class count in each batch image
-            for b in range(y_train.shape[0]):
-                batch_count += np.sum(y_train[b][:,:,i])
-            class_counts.append(batch_count)
-
-        # create Counts
-        y = []
-        for i in range(num_classes):
-            # Adjusts for absence
-            if class_counts[i] == 0:
-                class_counts[i] = 1
-            y.extend([i]*int(class_counts[i]))
-        # Calculate weights
-        weights = compute_class_weight("balanced", list(range(num_classes)), y)
-
-        return weights
+    # -----------------------------------------------------------------------------#
+    #                                   RUN
+    # -----------------------------------------------------------------------------#
 
     # TO IMPLEMENT - Custom
     classes, color_dict = custom_class
     if not classes and not color_dict:
         pass
 
-    # RUN --------------------------------------------------------------------------
     files = os.listdir(X_dir)
     num_classes = len(palette)
     n = len(files)
@@ -362,6 +382,28 @@ def getColorMap(colors):
     return cmap
 
 
+def apply_color_map(colors, image):
+    """
+    Applies the color specified by colors to the input image.
+
+    Input:
+
+        colors - list of colors in color map
+
+        image - image to apply color map to
+
+    Output:
+
+        color_image
+
+    """
+    cmap = getColorMap(colors)
+    norm = Normalize(vmin=0, vmax=len(colors))
+    color_image = cmap(norm(image))[:, :, 0:3]  # drop alpha
+    return color_image
+
+
+
 def load_image(fname, pre=True):
     """
     Loads an image, with optional resize and pre-processing
@@ -451,6 +493,7 @@ def load_multigpu_checkpoint_weights(model, h5py_file):
         None
     """
 
+    print("Setting weights...")
     with h5py.File(h5py_file, "r") as file:
 
         # Get model subset in file - other layers are empty
@@ -475,76 +518,312 @@ def load_multigpu_checkpoint_weights(model, h5py_file):
                         weights.insert(0, np.array(layer_weights[term]))
 
                 # Load weights to model
-                print("Setting weights for layer:", layer.name)
                 layer.set_weights(weights)
 
             except Exception as e:
                 print("Error: Could not load weights for layer:", layer.name, file=stderr)
 
 
-
-        # print("Number of layers:", len(file.keys()))
-        # weight_file = file["model_1"]
-        # for layer_name in weight_file:
-        #
-        #     print(layer_name, weight_file[layer_name])
-        #
-        #     layer_weights = weight_file[layer_name]
-        #
-        #     weights = []
-        #     for term in layer_weights:
-        #
-        #         if isinstance(layer_weights[term], h5py.Dataset):
-        #             # Convert weights to numpy array
-        #             weights.append(np.array(layer_weights[term]))
-        #
-        #     # Set weights to layer
-
-# -------------------------- #
-# Build a demo model to test #
-# -------------------------- #
-def demoModel(dim, num_classes):
+def create_prob_map_from_mask(filename, palette):
     """
-    Builds a simple encoder decoder network - don't be too impresssed!
+
+    Creates a probability map with the input mask
+
+    Input:
+
+        filename - path to mask file
+
+        pallette - color palette of mask
+
+    Output:
+        prob_map - numpy array of size image.h x image.w x num_classes
     """
-    import numpy as np
-    from keras.models import Sequential, Model
-    from keras.layers import Input
-    from keras.layers import Conv2D, ZeroPadding2D, MaxPooling2D, Conv2DTranspose, Cropping2D
-    from keras.layers import concatenate, UpSampling2D, Reshape
-    import keras.backend as K
 
-    # Build model
-    input_image = Input(shape=(dim, dim, 3))
+    # Helper functions
+    def _getClassMask(rgb, im):
+        """
+        Takes an rgb tuple and returns a binary mask of size
+        im.shape[0] x im.shape[1] indicated where each color
+        is present.
 
-    conv = Conv2D(24, (3, 3), activation='relu', padding='same')(input_image)
+        Input:
+            rgb - tuple of (r, g, b)
 
-    pool = MaxPooling2D((2, 2), strides=(2, 2), name="pool")(conv)
+            im - segmentation ground truth image
 
-    conv1x1 = Conv2D(24, (1, 1), padding='same', activation='relu')(pool)
+        Output:
+            mask - binary mask
+        """
+        # Colour mask
+        if len(rgb) == 3:
+            r, g, b = rgb
+            r_mask = im[:, :, 0] == r
+            g_mask = im[:, :, 1] == g
+            b_mask = im[:, :, 2] == b
+            mask = r_mask & g_mask & b_mask
+            return mask
+        # 8-bit mask
+        return im[:, :] == rgb
 
-    up = UpSampling2D(size=(2,2))(conv1x1)
-    up_conv =  Conv2D(24, 2, activation = 'relu', padding = 'same')(up)
-    merge = concatenate([conv,up_conv], axis = 3)
-
-    conv = Conv2D(12, 3, activation = 'relu', padding = 'same')(merge)
-
-    activation = Conv2D(num_classes, (1, 1), activation = "softmax")(conv)
-
-    # need to reshape for training
-    output = Reshape((dim*dim, 3))(activation)
-
-    model = Model(inputs=[input_image], outputs=output)
-
-    model.summary()
-
-    return model
+    num_classes = len(palette)
+    # Load y-image
+    im = io.imread(filename)
+    # Convert to 3D ground truth
+    prob_map = np.zeros((im.shape[0], im.shape[1], num_classes), dtype=np.float32)
+    # Loop through colors in palette and assign to new array
+    for i in range(num_classes):
+        rgb = palette[i]
+        mask = _getClassMask(rgb, im)
+        prob_map[mask, i] = 1.
+    return prob_map
 
 
-# ---- #
-# DEMO #
-# ---- #
+# def generate_ROC_AUC(true_map, prob_map, color_dict, colors):
+#     """
+#     Generates ROC curves and AUC values for all class in image, as well
+#     as keeps raw data for later use.
+#
+#     Input:
+#         true_map - map of true values, generated from mask using
+#                     create_prob_map_from_mask()
+#         prob map - 3 dimensional prob_map created from model.predict()
+#
+#         color_dict - color dictionary containing names and colors
+#
+#         colors - list of colors
+#     Output:
+#
+#         ROC - dictionary:
+#                 "AUC" - scalar AUC value
+#                 "TPR" - array of trp for different thresholds
+#                 "FPR" - array of fpr for different thresholds
+#                 "raw_data" - type of (true, pred) where each are arrays
+#
+#     ! NEED TO INCLUDE SAMPLE WEIGHTS !
+#
+#     """
+#     # Create ROC curves for all tissue types
+#     ROC = {}
+#     for tissue_class in color_dict.keys():
+#         # Get class index
+#         class_idx = colors.index(color_dict[tissue_class])
+#
+#         true = np.ravel(true_map[:, :, class_idx])
+#         pred = np.ravel(prob_map[:, :, class_idx])
+#
+#         # Get FPR and TPR
+#         fpr, tpr, thresholds = roc_curve(true, pred)
+#         roc_auc = auc(fpr, tpr)
+#         if np.isnan(roc_auc):
+#             # class not present
+#             continue
+#         # Update values
+#         ROC[tissue_class] = {"AUC": roc_auc, "TPR": tpr, "FPR": fpr, "raw_data": (true, pred)}
+#
+#     return ROC
+
+class Validation(Callback):
+    """
+    A custom callback to perform validation at the
+    end of each epoch. Also writes useful class
+    metrics to tensorboard logs.
+    """
+
+    def __init__(self, generator, steps, classes):
+        """
+
+        Initialises the callback
+
+        Input:
+
+            generator -  validation generator of type segmentationGen()
+
+            steps - number of steps in validation e.g. n // batch_size
+        """
+        self.validation_data = generator
+        self.validation_steps = steps
+        self.classes = classes
+
+    def on_epoch_end(self, epoch, logs={}):
+
+        # Validation
+        print("Validation: ", end=" ")
+
+        scores = {}
+        for i in range(self.validation_steps):
+
+            X, y_true, _ = next(self.validation_data)
+
+            y_pred = self.model.predict(X)
+
+            y_true = np.ndarray.flatten(np.argmax(y_true, axis=-1))
+            y_pred = np.ndarray.flatten(np.argmax(y_pred, axis=-1))
+
+            confusion_matrix = ConfusionMatrix(y_true, y_pred)
+
+            # Change names
+            indices = list(confusion_matrix.classes)
+
+            if len(indices) < 2:
+                continue
+
+            if len(indices) == 2:
+                indices = [np.max(y_pred), np.min(y_pred)]
+
+            # Convert to array
+            cm = confusion_matrix.to_array()
+            present_classes = self.classes[indices]
+            for pos in range(len(present_classes)):
+
+                total = np.sum(cm[pos, :])
+                if total == 0:
+                    continue
+
+                # Calculate recall
+                acc = round(cm[pos, pos] / total, 5)
+                # Save patch accuracy
+                try:
+                    scores[present_classes[pos]].append(acc)
+
+                except KeyError:
+                    scores[present_classes[pos]] = [acc]
+
+        # show results for epoch
+        for tissue_class in scores.keys():
+            # Calculate mean score of each tissue class
+            mean_score = np.round(np.mean(scores[tissue_class]), 5)
+            print(tissue_class, ":", mean_score, end=" ")
+
+            # Add mean score to Tensorboard/History logs
+            logs[tissue_class] = mean_score
+        print()
+        return
+
+
+class Test(Callback):
+    """
+    A custom callback to perform testing at the
+    end of the whole training run. Also writes useful class
+    metrics to tensorboard logs.
+    """
+
+    def __init__(self, generator, steps, classes):
+        """
+
+        Initialises the callback
+
+        Input:
+
+            generator -  validation generator of type segmentationGen()
+
+            steps - number of steps in validation e.g. n // batch_size
+        """
+        self.test_data = generator
+        self.test_steps = steps
+        self.classes = classes
+
+    def on_train_end(self, epoch, logs={}):
+
+        # Test
+        print("Test: ", end=" ")
+
+        scores = {}
+        for i in range(self.test_steps):
+
+            X, y_true, _ = next(self.test_data)
+
+            y_pred = self.model.predict(X)
+
+            y_true = np.ndarray.flatten(np.argmax(y_true, axis=-1))
+            y_pred = np.ndarray.flatten(np.argmax(y_pred, axis=-1))
+
+            confusion_matrix = ConfusionMatrix(y_true, y_pred)
+
+            # Change names
+            indices = list(confusion_matrix.classes)
+
+            if len(indices) < 2:
+                continue
+
+            if len(indices) == 2:
+                indices = [np.max(y_pred), np.min(y_pred)]
+
+            # Convert to array
+            cm = confusion_matrix.to_array()
+            present_classes = self.classes[indices]
+            for pos in range(len(present_classes)):
+
+                total = np.sum(cm[pos, :])
+                if total == 0:
+                    continue
+
+                # Calculate recall
+                acc = round(cm[pos, pos] / total, 5)
+                # Save patch accuracy
+                try:
+                    scores[present_classes[pos]].append(acc)
+
+                except KeyError:
+                    scores[present_classes[pos]] = [acc]
+
+        # show results for epoch
+        for tissue_class in scores.keys():
+            # Calculate mean score of each tissue class
+            mean_score = np.round(np.mean(scores[tissue_class]), 5)
+            print(tissue_class, ":", mean_score, end=" ")
+
+            # Add mean score to Tensorboard/History logs
+            logs[tissue_class] = mean_score
+        print()
+        return
+
+
+# ------------------------------------------------------------------------------------------ #
+# ------------------------------------------------------------------------------------------ #
+
+
 if __name__ == "__main__":
+
+    # -------------------------- #
+    # Build a demo model to test #
+    # -------------------------- #
+    def demoModel(dim, num_classes):
+        """
+        Builds a simple encoder decoder network - don't be too impresssed!
+        """
+        import numpy as np
+        from keras.models import Sequential, Model
+        from keras.layers import Input
+        from keras.layers import Conv2D, ZeroPadding2D, MaxPooling2D, Conv2DTranspose, Cropping2D
+        from keras.layers import concatenate, UpSampling2D, Reshape
+        import keras.backend as K
+
+        # Build model
+        input_image = Input(shape=(dim, dim, 3))
+
+        conv = Conv2D(24, (3, 3), activation='relu', padding='same')(input_image)
+
+        pool = MaxPooling2D((2, 2), strides=(2, 2), name="pool")(conv)
+
+        conv1x1 = Conv2D(24, (1, 1), padding='same', activation='relu')(pool)
+
+        up = UpSampling2D(size=(2, 2))(conv1x1)
+        up_conv = Conv2D(24, 2, activation='relu', padding='same')(up)
+        merge = concatenate([conv, up_conv], axis=3)
+
+        conv = Conv2D(12, 3, activation='relu', padding='same')(merge)
+
+        activation = Conv2D(num_classes, (1, 1), activation="softmax")(conv)
+
+        # need to reshape for training
+        output = Reshape((dim * dim, 3))(activation)
+
+        model = Model(inputs=[input_image], outputs=output)
+
+        model.summary()
+
+        return model
+
 
     # SET RANDOM SEED ---- |
     from numpy.random import seed
@@ -555,7 +834,6 @@ if __name__ == "__main__":
 
     from keras.optimizers import SGD
     import matplotlib.pyplot as plt
-
 
     # Directory Setup
     base_dir = "./Demo_Images/"
@@ -570,7 +848,7 @@ if __name__ == "__main__":
     batch_size = 5
 
     # Color Palette
-    colours = [(17,16,16),(0,255,0),(255,0,0)]
+    colours = [(17, 16, 16),(0, 255, 0), (255, 0, 0)]
     palette = Palette(colours)
 
     # Model parameters
