@@ -212,6 +212,8 @@ def ResNet_UNet(dim=512, num_classes=6):
     # Attached U-net from second last layer - activation_49
     res_out = resnet.layers[-2].output
 
+    # STANDARD UPSAMPLING 512 -> 256 -> 128 -> 64
+
     # Upsampling 1
     up1 = UpSampling2D(size=(2,2))(res_out)
     up1_conv = Conv2D(512, 2, activation = 'relu', padding = 'same',
@@ -246,9 +248,9 @@ def ResNet_UNet(dim=512, num_classes=6):
                  kernel_initializer = 'he_normal')(up4)
     prev_layer = resnet.get_layer("activation_1").output
     merge3 = concatenate([prev_layer,up4_conv], axis = 3)
-    merge3_conv1 = Conv2D(256, 3, activation = 'relu', padding = 'same',
+    merge3_conv1 = Conv2D(128, 3, activation = 'relu', padding = 'same',
                    kernel_initializer = 'he_normal')(merge3)
-    merge3_conv2 = Conv2D(256, 3, activation = 'relu', padding = 'same',
+    merge3_conv2 = Conv2D(128, 3, activation = 'relu', padding = 'same',
                    kernel_initializer = 'he_normal')(merge3_conv1)
 
     # Upsample 5

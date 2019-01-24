@@ -10,7 +10,7 @@ Author: Simon Thomas
 Email: simon.thomas@uq.edu.au
 
 Start Date: 24/10/18
-Last Update: 17/01/19
+Last Update: 24/01/19
 
 """
 
@@ -19,16 +19,26 @@ from skimage import io
 from sys import stderr
 import h5py
 import os
+import io as IO
+
+
 from cv2 import resize
 
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MultipleLocator
+from matplotlib.colors import LinearSegmentedColormap
+import matplotlib.colors as cols
+from matplotlib.pyplot import Normalize
+
 from keras.callbacks import Callback
+import keras.backend as K
+import tensorflow as tf
 
 from sklearn.utils.class_weight import compute_class_weight
 
 from pandas_ml import ConfusionMatrix
 
-import matplotlib.colors as cols
-from matplotlib.pyplot import Normalize
+
 
 
 class Palette(object):
@@ -76,8 +86,7 @@ def segmentationGen(
                     batch_size, X_dir, y_dir,
                     palette, x_dim, y_dim,
                     suffix=".png", weight_mod=None,
-                    sparse=False,
-                    custom_class=[None, None]):
+                    sparse=False):
     """
     A generator that returns X, y & sampe_weight data in designated batch sizes,
     specifically for segmentation problems. It converts y images 2D arrays
@@ -142,9 +151,6 @@ def segmentationGen(
         sparse -    *NOT IMPLEMENTED* bool indicating whether ground-truth is
                     sparse-encoded compared to one-hot-encoded.
 
-        custom_class - a list pair of [classes, color_dictionary] to convert label
-                        images to simplier problems. Undesired classes are subsumed
-                        into background or other relevant classes.
 
     Output:
         using the global next() function or internal next() function the class
@@ -217,6 +223,11 @@ def segmentationGen(
         for c in absent_classes:
             weights = np.insert(weights, c, 0)
 
+        # Modify weight for a particular class
+        if weight_mod:
+            for key in weight_mod.keys():
+                weights[key] *= weight_mod[key]
+
         return weights
 
     def _createBatches(positions):
@@ -240,12 +251,12 @@ def segmentationGen(
             fname = files[pos][:-4]
 
             # load X-image
-            im = io.imread(os.path.join(X_dir, fname + suffix))
+            im = io.imread(os.path.join(X_dir, fname + suffix))[:,:,0:3]    # drop alpha
             im = resize(im, (x_dim, x_dim))
             X_batch.append(im)
 
             # Load y-image
-            im = io.imread(os.path.join(y_dir, fname + ".png"))
+            im = io.imread(os.path.join(y_dir, fname + ".png"))[:,:,0:3]    # drop alpha
             im = resize(im, (y_dim, y_dim))
             # Convert to 3D ground truth
             y = np.zeros((im.shape[0], im.shape[1], num_classes), dtype=np.float32)
@@ -258,8 +269,13 @@ def segmentationGen(
             y_batch.append(y)
 
         # Combine images into batches and normalise
-        X_train = np.stack(X_batch, axis=0).astype(np.float32) / 255.
+        X_train = np.stack(X_batch, axis=0).astype(np.float32)
         y_train = np.stack(y_batch, axis=0)
+
+        # Preprocess X_train
+        X_train /= 255.
+        X_train -= 0.5
+        X_train *= 2.
 
         # Calculate sample weights
         weights = _calculateWeights(y_train)
@@ -283,11 +299,6 @@ def segmentationGen(
     # -----------------------------------------------------------------------------#
     #                                   RUN
     # -----------------------------------------------------------------------------#
-
-    # TO IMPLEMENT - Custom
-    classes, color_dict = custom_class
-    if not classes and not color_dict:
-        pass
 
     files = os.listdir(X_dir)
     num_classes = len(palette)
@@ -421,7 +432,9 @@ def load_image(fname, pre=True):
     """
     im = io.imread(fname).astype("float32")
     if pre:
-        im = im / 255.
+            im /= 255.
+            im -= 0.5
+            im *= 2.
     return im
 
 
@@ -622,6 +635,55 @@ def create_prob_map_from_mask(filename, palette):
 #
 #     return ROC
 
+
+def write_confusion_matrix(matrix, classes):
+    """
+     Writes a confusion matrix to the tensorboard session
+
+     Input:
+        matrix - numpy confusion matrix
+
+        classes - ordered list of classes
+
+    Output:
+        None
+    """
+    # Compute row sums for Recall
+    row_sums = matrix.sum(axis=1)
+    matrix = np.round(matrix / row_sums[:, np.newaxis], 3)
+
+    # Import colors
+    color = [255, 118, 25]
+    orange = [ c / 255. for c in color]
+    white_orange = LinearSegmentedColormap.from_list("", ["white", orange])
+
+    fig = plt.figure(figsize=(12, 14))
+    ax = fig.add_subplot(111)
+    cax = ax.matshow(matrix, interpolation='nearest', cmap=white_orange)
+    fig.colorbar(cax)
+
+    ax.set_xticklabels(['']+classes, fontsize=8)
+    ax.set_yticklabels(['']+classes, fontsize=8)
+
+    # Get ticks to show properly
+    ax.xaxis.set_major_locator(MultipleLocator(1))
+    ax.yaxis.set_major_locator(MultipleLocator(1))
+
+    ax.set_title("Recall")
+    ax.set_ylabel("Ground Truth")
+    ax.set_xlabel("Predicted")
+
+    for i in range(len(classes)):
+        for j in range(len(classes)):
+            ax.text(j-0.1, i, str(matrix[i, j]), fontsize=8)
+
+    buffer = IO.BytesIO()
+    plt.savefig(buffer, format="png")
+    buffer.seek(0)
+    #plt.show()
+    return buffer
+
+
 class Validation(Callback):
     """
     A custom callback to perform validation at the
@@ -629,7 +691,7 @@ class Validation(Callback):
     metrics to tensorboard logs.
     """
 
-    def __init__(self, generator, steps, classes):
+    def __init__(self, generator, steps, classes, run_name, color_list):
         """
 
         Initialises the callback
@@ -639,64 +701,189 @@ class Validation(Callback):
             generator -  validation generator of type segmentationGen()
 
             steps - number of steps in validation e.g. n // batch_size
+
+            classes - an ordered list of classes ie. [ "EPI", "GLD" etc ]
         """
         self.validation_data = generator
         self.validation_steps = steps
-        self.classes = classes
+        self.classes = np.asarray(classes)
+        self.cms = []
+        self.run_name = run_name
+        self.color_list = color_list
+
+    def write_predict_plot(self, mask, prediction, name, epoch):
+        """
+        Write mask and prediction to Tensorboard
+        """
+        fig, axes = plt.subplots(1, 2)
+        axes[0].imshow(apply_color_map(self.color_list, mask))
+        axes[0].set_title("Ground Truth")
+        axes[1].imshow(apply_color_map(self.color_list, prediction))
+        axes[1].set_title("Predict")
+        plt.axis('off')
+
+        # save to buffer
+        plot_buffer = IO.BytesIO()
+        plt.savefig(plot_buffer, format="png")
+        plot_buffer.seek(0)
+
+        # Convert PNG buffer to TF image
+        image = tf.image.decode_png(plot_buffer.getvalue(), channels=4)
+
+        # Add the batch dimension
+        image = tf.expand_dims(image, 0)
+
+        # Add image summary
+        summary_op = tf.summary.image(name,
+                                      image,
+                                      max_outputs=1,
+                                      family="Predictions")
+
+        with tf.Session() as sess:
+            summary = sess.run(summary_op)
+        # Write summary
+        writer = tf.summary.FileWriter(logdir="./logs/" + self.run_name)
+        writer.add_summary(summary, epoch)
+        writer.close()
+
+    def write_current_plot(self, epoch):
+        """
+        Write confusion matrix to Tensorboard
+        """
+        # Get the matrix
+        matrix = self.cms[-1]
+
+        # Prepare the plot
+        plot_buffer = write_confusion_matrix(matrix, list(self.classes))
+
+        # Convert PNG buffer to TF image
+        image = tf.image.decode_png(plot_buffer.getvalue(), channels=4)
+
+        # Add the batch dimension
+        image = tf.expand_dims(image, 0)
+
+        # Add image summary
+        summary_op = tf.summary.image("confusion_matrix_epoch_" + str(epoch),
+                                      image,
+                                      max_outputs=24,
+                                      family="Confusion Matrix")
+
+        with tf.Session() as sess:
+            summary = sess.run(summary_op)
+        # Write summary
+        writer = tf.summary.FileWriter(logdir="./logs/" + self.run_name)
+        writer.add_summary(summary, epoch)
+        writer.close()
+
+
+    def on_train_end(self, logs={}):
+        # 1. Print final confusion matrix
+        print()
+        print("Confusion Matrix (final epoch):")
+        for i in range(12):
+            for j in range(12):
+                print(self.cms[-1][i, j], end=", ")
+            print()
 
     def on_epoch_end(self, epoch, logs={}):
 
-        # Validation
-        print("Validation: ", end=" ")
+        # Create new validation model
+        val_model = K.function(inputs=[self.model.input, K.learning_phase()], outputs=[self.model.output], )
 
-        scores = {}
-        for i in range(self.validation_steps):
+        # Confusion Matrix
+        epoch_cm = np.zeros((len(self.classes), len(self.classes)))
 
+        # Loop through validation set
+        for n in range(self.validation_steps):
+
+            # Grab next batch
             X, y_true, _ = next(self.validation_data)
 
-            y_pred = self.model.predict(X)
+            # Make prediction with model
+            learning_phase = 1
+            y_pred = val_model([X, learning_phase])
 
-            y_true = np.ndarray.flatten(np.argmax(y_true, axis=-1))
-            y_pred = np.ndarray.flatten(np.argmax(y_pred, axis=-1))
+            # Find highest classes prediction
+            y_true = np.argmax(y_true, axis=-1)
+            y_pred = np.argmax(y_pred, axis=-1)
 
-            confusion_matrix = ConfusionMatrix(y_true, y_pred)
+            # Flatten batch into single array
+            y_true = np.ndarray.flatten(y_true)
+            y_pred = np.ndarray.flatten(y_pred)
 
-            # Change names
-            indices = list(confusion_matrix.classes)
+            # Create batch CM
+            batch_cm = ConfusionMatrix(y_true, y_pred)
 
-            if len(indices) < 2:
-                continue
+            # Get all classes in batch
+            all_classes = list(batch_cm.classes)
 
-            if len(indices) == 2:
-                indices = [np.max(y_pred), np.min(y_pred)]
+            batch_cm = batch_cm.to_array()
 
-            # Convert to array
-            cm = confusion_matrix.to_array()
-            present_classes = self.classes[indices]
-            for pos in range(len(present_classes)):
+            # Update epoch CM
+            for i in all_classes:
+                for j in all_classes:
+                    epoch_cm[i, j] += batch_cm[all_classes.index(i), all_classes.index(j)]
 
-                total = np.sum(cm[pos, :])
-                if total == 0:
-                    continue
+        # End of epoch - compute stats
+        print("Validation")
+        for i in range(12):
+            # Recall - TP / (TP + FN)
+            try:
+                precision = np.round(epoch_cm[i, i] / np.sum(epoch_cm[i, :]), 5)
+            except ZeroDivisionError:
+                precision = 0
+            # Update Logs
+            name = self.classes[i] + "_P"
+            print(self.classes[i], "P:", precision, end=" ")
+            logs[name] = precision
 
-                # Calculate recall
-                acc = round(cm[pos, pos] / total, 5)
-                # Save patch accuracy
-                try:
-                    scores[present_classes[pos]].append(acc)
+            # Precision - TP / (TP + FP)
+            try:
+                recall = np.round(epoch_cm[i, i] / np.sum(epoch_cm[:, i]), 5)
+            except ZeroDivisionError:
+                recall = 0
+            # Update Logs
+            name = self.classes[i] + "_R"
+            print("R:", recall, end=" ")
+            logs[name] = recall
 
-                except KeyError:
-                    scores[present_classes[pos]] = [acc]
+            print()
 
-        # show results for epoch
-        for tissue_class in scores.keys():
-            # Calculate mean score of each tissue class
-            mean_score = np.round(np.mean(scores[tissue_class]), 5)
-            print(tissue_class, ":", mean_score, end=" ")
+        # PREDICT A SAMPLE OF IMAGES
 
-            # Add mean score to Tensorboard/History logs
-            logs[tissue_class] = mean_score
-        print()
+        # Grab next batch
+        X, y_true, _ = next(self.validation_data)
+
+        # Make prediction with model
+        learning_phase = 1
+        y_pred = val_model([X, learning_phase])[0]
+
+        y_pred = y_pred.reshape(
+                            y_pred.shape[0],    # batch_size
+                            X[0].shape[0],  # dim
+                            X[0].shape[1],  # dim
+                            y_pred.shape[-1]    # number of classes
+                            )
+        y_true = y_true.reshape(
+                            y_pred.shape[0],  # batch_size
+                            X[0].shape[0],  # dim
+                            X[0].shape[1],  # dim
+                            y_pred.shape[-1]
+                            )
+
+        # Loop through each image in batch                )
+        for i in range(y_pred.shape[0]):
+            mask, pred = np.argmax(y_true[i], axis=-1), np.argmax(y_pred[i], axis=-1)
+
+            self.write_predict_plot(mask, pred, "Pred_E", epoch)
+
+        # Clear memory of val model
+        del val_model
+        self.cms.append(epoch_cm)
+
+        # Write confusion matrix to tensorboard
+        self.write_current_plot(epoch)
+
         return
 
 
@@ -724,57 +911,6 @@ class Test(Callback):
 
     def on_train_end(self, epoch, logs={}):
 
-        # Test
-        print("Test: ", end=" ")
-
-        scores = {}
-        for i in range(self.test_steps):
-
-            X, y_true, _ = next(self.test_data)
-
-            y_pred = self.model.predict(X)
-
-            y_true = np.ndarray.flatten(np.argmax(y_true, axis=-1))
-            y_pred = np.ndarray.flatten(np.argmax(y_pred, axis=-1))
-
-            confusion_matrix = ConfusionMatrix(y_true, y_pred)
-
-            # Change names
-            indices = list(confusion_matrix.classes)
-
-            if len(indices) < 2:
-                continue
-
-            if len(indices) == 2:
-                indices = [np.max(y_pred), np.min(y_pred)]
-
-            # Convert to array
-            cm = confusion_matrix.to_array()
-            present_classes = self.classes[indices]
-            for pos in range(len(present_classes)):
-
-                total = np.sum(cm[pos, :])
-                if total == 0:
-                    continue
-
-                # Calculate recall
-                acc = round(cm[pos, pos] / total, 5)
-                # Save patch accuracy
-                try:
-                    scores[present_classes[pos]].append(acc)
-
-                except KeyError:
-                    scores[present_classes[pos]] = [acc]
-
-        # show results for epoch
-        for tissue_class in scores.keys():
-            # Calculate mean score of each tissue class
-            mean_score = np.round(np.mean(scores[tissue_class]), 5)
-            print(tissue_class, ":", mean_score, end=" ")
-
-            # Add mean score to Tensorboard/History logs
-            logs[tissue_class] = mean_score
-        print()
         return
 
 
