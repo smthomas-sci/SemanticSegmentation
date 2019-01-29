@@ -10,7 +10,7 @@ Author: Simon Thomas
 Email: simon.thomas@uq.edu.au
 
 Start Date: 24/10/18
-Last Update: 24/01/19
+Last Update: 17/01/19
 
 """
 
@@ -22,7 +22,7 @@ import os
 import io as IO
 
 
-from cv2 import resize
+from cv2 import resize, cvtColor, COLOR_RGB2BGR, imwrite
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
@@ -30,15 +30,14 @@ from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.colors as cols
 from matplotlib.pyplot import Normalize
 
-from keras.callbacks import Callback
+from keras.callbacks import Callback, TensorBoard
+from keras.models import Model
 import keras.backend as K
 import tensorflow as tf
 
 from sklearn.utils.class_weight import compute_class_weight
 
 from pandas_ml import ConfusionMatrix
-
-
 
 
 class Palette(object):
@@ -85,8 +84,7 @@ class Palette(object):
 def segmentationGen(
                     batch_size, X_dir, y_dir,
                     palette, x_dim, y_dim,
-                    suffix=".png", weight_mod=None,
-                    sparse=False):
+                    suffix=".png", weight_mod=None):
     """
     A generator that returns X, y & sampe_weight data in designated batch sizes,
     specifically for segmentation problems. It converts y images 2D arrays
@@ -148,10 +146,6 @@ def segmentationGen(
                       i.e. weight_mod = {0 : 1.02} increases weight 0 by 2%.
                       Default is None.
 
-        sparse -    *NOT IMPLEMENTED* bool indicating whether ground-truth is
-                    sparse-encoded compared to one-hot-encoded.
-
-
     Output:
         using the global next() function or internal next() function the class
         returns X_train, y_train numpy arrays:
@@ -183,8 +177,6 @@ def segmentationGen(
             return mask
         # 8-bit mask
         return im[:,:] == rgb
-
-
 
     def _calculateWeights(y_train):
         """
@@ -279,12 +271,11 @@ def segmentationGen(
 
         # Calculate sample weights
         weights = _calculateWeights(y_train)
-        # # Modify weights
-        # if weight_mod:
-        #     for i in weight_mod:
-        #         weights[i] = weight_mod[i] #*= weight_mod[i]
+        # Modify weights
+        if weight_mod:
+            for i in weight_mod:
+                weights[i] *= weight_mod[i]
 
-        #print("Weights:", weights)
         # Take weight for each correct position
         sample_weights = np.take(weights, np.argmax(y_train, axis=-1))
 
@@ -357,11 +348,13 @@ def predict_image(model, image):
 
         class_img - argmax of preds of shape (dim, dim, 1)
     """
-    # Add new axis to conform to model input
-    x = image[np.newaxis, ::]
+
+    if len(image.shape) < 4:
+        # Add new axis to conform to model input
+        image = image[np.newaxis, ::]
 
     # Prediction
-    preds = model.predict(x)[0].reshape(
+    preds = model.predict(image)[0].reshape(
                                     image.shape[0],
                                     image.shape[0],
                                     model.layers[-1].output_shape[-1])
@@ -371,7 +364,7 @@ def predict_image(model, image):
     return preds, class_img
 
 
-def getColorMap(colors):
+def get_color_map(colors):
     """
     Returns a matplotlib color map of the list of RGB values
 
@@ -401,18 +394,17 @@ def apply_color_map(colors, image):
 
         colors - list of colors in color map
 
-        image - image to apply color map to
+        image - image to apply color map to with shape (n, n)
 
     Output:
 
-        color_image
+        color_image - image with shape (n, n, 3)
 
     """
-    cmap = getColorMap(colors)
+    cmap = get_color_map(colors)
     norm = Normalize(vmin=0, vmax=len(colors))
     color_image = cmap(norm(image))[:, :, 0:3]  # drop alpha
     return color_image
-
 
 
 def load_image(fname, pre=True):
@@ -553,7 +545,7 @@ def create_prob_map_from_mask(filename, palette):
     """
 
     # Helper functions
-    def _getClassMask(rgb, im):
+    def _get_class_mask(rgb, im):
         """
         Takes an rgb tuple and returns a binary mask of size
         im.shape[0] x im.shape[1] indicated where each color
@@ -577,6 +569,7 @@ def create_prob_map_from_mask(filename, palette):
             return mask
         # 8-bit mask
         return im[:, :] == rgb
+    # -------------------------#
 
     num_classes = len(palette)
     # Load y-image
@@ -586,7 +579,7 @@ def create_prob_map_from_mask(filename, palette):
     # Loop through colors in palette and assign to new array
     for i in range(num_classes):
         rgb = palette[i]
-        mask = _getClassMask(rgb, im)
+        mask = _get_class_mask(rgb, im)
         prob_map[mask, i] = 1.
     return prob_map
 
@@ -635,63 +628,158 @@ def create_prob_map_from_mask(filename, palette):
 #
 #     return ROC
 
-
-def write_confusion_matrix(matrix, classes):
+def calculate_tile_size(image_shape, lower=50, upper=150):
     """
-     Writes a confusion matrix to the tensorboard session
+    Calculates a tile size with optimal overlap
 
-     Input:
-        matrix - numpy confusion matrix
+    Input:
 
-        classes - ordered list of classes
+        image - original histo image (large size)
+
+        lower - lowerbound threshold for overlap
+
+        upper - upper-bound threshold for overlap
 
     Output:
-        None
+
+        dim - dimension of tile
+
+        threshold - calculated overlap for tile and input image
     """
-    # Compute row sums for Recall
-    row_sums = matrix.sum(axis=1)
-    matrix = np.round(matrix / row_sums[:, np.newaxis], 3)
+    dims = [x * 2 ** 5 for x in range(1, 80, 2)]
+    w = image_shape[1]
+    h = image_shape[0]
+    thresholds = {}
+    for d in dims:
+        w_steps = w // d
+        w_overlap = (d - (w % d)) // w_steps
+        h_steps = h // d
+        h_overlap = (d - (h % d)) // h_steps
+        # Threshold is the half the minimum overlap
+        thresholds[d] = min(w_overlap, h_overlap) // 2
+    # Loop through pairs and take first that satisfies
+    for d, t in sorted(thresholds.items(), key=lambda x: x[1]):
+        if lower < t < upper:
+            if d <= 1408:
+                return d, t  # dim, threshold
+    d = dims[len(dims) // 2]
+    return d, thresholds[d]
 
-    # Import colors
-    color = [255, 118, 25]
-    orange = [ c / 255. for c in color]
-    white_orange = LinearSegmentedColormap.from_list("", ["white", orange])
+def whole_image_predict(files, model, output_directory, colors):
+    """
+    Generates a segmentation mask for each of the images in files
+    and saves them in the output directory.
 
-    fig = plt.figure(figsize=(12, 14))
-    ax = fig.add_subplot(111)
-    cax = ax.matshow(matrix, interpolation='nearest', cmap=white_orange)
-    fig.colorbar(cax)
+    Input:
 
-    ax.set_xticklabels(['']+classes, fontsize=8)
-    ax.set_yticklabels(['']+classes, fontsize=8)
+        files - list of files including their full paths
 
-    # Get ticks to show properly
-    ax.xaxis.set_major_locator(MultipleLocator(1))
-    ax.yaxis.set_major_locator(MultipleLocator(1))
+        model - model to use to predict.
+                >> Must be of type K.function NOT keras.models.Model
+                >> Must have output shape (1, dim, dim, 12)
 
-    ax.set_title("Recall")
-    ax.set_ylabel("Ground Truth")
-    ax.set_xlabel("Predicted")
+        output_directory -  path to directory to save files, include / on end
 
-    for i in range(len(classes)):
-        for j in range(len(classes)):
-            ax.text(j-0.1, i, str(matrix[i, j]), fontsize=8)
+        colors - list of RGB values to apply to segmentation
 
-    buffer = IO.BytesIO()
-    plt.savefig(buffer, format="png")
-    buffer.seek(0)
-    #plt.show()
-    return buffer
+    Output:
+
+        None
+
+    """
+    image_num = 1
+    for file in files:
+        # Get name
+        name = file.split("/")[-1].split(".")[0]
+        print("Whole Image Segmentation:", name, "Num:", image_num, "of", len(files))
+        image_num += 1
+
+        try:
+            # Load image
+            histo = load_image(file, pre=True)
+
+            # Create canvas to add predictions
+            canvas = np.zeros_like(histo)
+
+            # Tile info
+            w = histo.shape[1]
+            h = histo.shape[0]
+            dim, threshold = calculate_tile_size(histo.shape, lower=50, upper=100)
+
+            print("Tile size:", dim)
+            print("Tile threshold:", threshold)
 
 
-class Validation(Callback):
+        except Exception as e:
+            print("Failed to process:", name, e, file=stderr)
+            continue
+
+        # Compute number of vertical and horizontal steps
+        w_steps = w // dim
+        w_overlap = (dim - (w % dim)) // w_steps
+        h_steps = h // dim
+        h_overlap = (dim - (h % dim)) // h_steps
+        # starting positions
+        w_x, w_y = 0, dim
+        h_x, h_y = 0, dim
+
+        # Loop through all tiles and predict
+        step = 1
+        for i in range(h_steps + 1):
+
+            for j in range(w_steps + 1):
+
+                print("Processing tile", step, "of", (h_steps + 1) * (w_steps + 1), )
+                step += 1
+
+                # Grab a tile
+                tile = histo[h_x:h_y, w_x:w_y, :][np.newaxis, ::]
+
+                # Check and correct shape
+                orig_shape = tile[0].shape
+                if tile.shape != (dim, dim, 3):
+                    tile = resize(tile[0], dsize=(dim, dim))[np.newaxis, ::]
+
+                # Predict
+                learning_phase = 1
+                probs = model([tile, learning_phase])[0]    # returns list by default
+                class_pred = np.argmax(probs[0], axis=-1)
+
+                segmentation = apply_color_map(colors, class_pred)
+
+                # Add prediction to canvas
+                canvas[h_x + threshold: h_y - threshold,
+                       w_x + threshold: w_y - threshold, :] = segmentation[threshold:-threshold,
+                                                                           threshold:-threshold, :]
+
+                # Update column positions
+                w_x += dim - w_overlap
+                w_y += dim - w_overlap
+
+            # Update row positions
+            h_x += dim - h_overlap
+            h_y += dim - h_overlap
+            w_x, w_y = 0, dim
+
+        # Save Segmentation
+        fname = output_directory + name + "_WSI_" + str(dim) + "px.png"
+        # Scale values to RGB
+        canvas *= 255.
+        # Convert canvas to BGR color space for cv2
+        canvas = cvtColor(canvas, COLOR_RGB2BGR)
+        imwrite(fname, canvas)
+
+        # Wipe canvas from memory
+        del canvas
+
+class Validation(TensorBoard):
     """
     A custom callback to perform validation at the
     end of each epoch. Also writes useful class
     metrics to tensorboard logs.
     """
 
-    def __init__(self, generator, steps, classes, run_name, color_list):
+    def __init__(self, generator, steps, classes, run_name, color_list, WSI=False, **kwargs):
         """
 
         Initialises the callback
@@ -703,21 +791,79 @@ class Validation(Callback):
             steps - number of steps in validation e.g. n // batch_size
 
             classes - an ordered list of classes ie. [ "EPI", "GLD" etc ]
+
+            run_name - str of the unique run identifier
+
+            color_list - list of RGB values for applying colors to predictions
+
+            log_dir - Tensorboard log directory
         """
+        super().__init__(**kwargs)
         self.validation_data = generator
         self.validation_steps = steps
         self.classes = np.asarray(classes)
         self.cms = []
         self.run_name = run_name
         self.color_list = color_list
+        self.WSI = WSI
 
-    def write_predict_plot(self, mask, prediction, name, epoch):
+    # Helper functions ------------------------------------------------ #
+
+    def write_confusion_matrix_to_buffer(self, matrix, classes):
+        """
+         Writes a confusion matrix to the tensorboard session
+
+         Input:
+            matrix - numpy confusion matrix
+
+            classes - ordered list of classes
+
+        Output:
+            buffer - buffer where plot is written to
+        """
+        # Compute row sums for Recall
+        row_sums = matrix.sum(axis=1)
+        matrix = np.round(matrix / row_sums[:, np.newaxis], 3)
+
+        # Import colors
+        color = [255, 118, 25]
+        orange = [c / 255. for c in color]
+        white_orange = LinearSegmentedColormap.from_list("", ["white", orange])
+
+        fig = plt.figure(figsize=(12, 14))
+        ax = fig.add_subplot(111)
+        cax = ax.matshow(matrix, interpolation='nearest', cmap=white_orange)
+        fig.colorbar(cax)
+
+        ax.set_xticklabels([''] + classes, fontsize=8)
+        ax.set_yticklabels([''] + classes, fontsize=8)
+
+        # Get ticks to show properly
+        ax.xaxis.set_major_locator(MultipleLocator(1))
+        ax.yaxis.set_major_locator(MultipleLocator(1))
+
+        ax.set_title("Recall")
+        ax.set_ylabel("Ground Truth")
+        ax.set_xlabel("Predicted")
+
+        for i in range(len(classes)):
+            for j in range(len(classes)):
+                ax.text(j - 0.1, i, str(matrix[i, j]), fontsize=8)
+
+        buffer = IO.BytesIO()
+        plt.savefig(buffer, format="png")
+        buffer.seek(0)
+        # plt.show()
+        return buffer
+
+    def write_current_predict(self, mask, prediction, name, epoch):
         """
         Write mask and prediction to Tensorboard
         """
         fig, axes = plt.subplots(1, 2)
         axes[0].imshow(apply_color_map(self.color_list, mask))
         axes[0].set_title("Ground Truth")
+        plt.axis('off')
         axes[1].imshow(apply_color_map(self.color_list, prediction))
         axes[1].set_title("Predict")
         plt.axis('off')
@@ -727,26 +873,17 @@ class Validation(Callback):
         plt.savefig(plot_buffer, format="png")
         plot_buffer.seek(0)
 
-        # Convert PNG buffer to TF image
-        image = tf.image.decode_png(plot_buffer.getvalue(), channels=4)
+        # Create an Image object
+        img_sum = tf.Summary.Image(encoded_image_string=plot_buffer.getvalue(),
+                                   height=mask.shape[0],
+                                   width=mask.shape[1])
+        # Create a Summary value
+        im_summary = tf.Summary.Value(image=img_sum, tag="Segmentation")
 
-        # Add the batch dimension
-        image = tf.expand_dims(image, 0)
+        summary = tf.Summary(value=[im_summary])
+        self.writer.add_summary(summary, str(epoch))
 
-        # Add image summary
-        summary_op = tf.summary.image(name,
-                                      image,
-                                      max_outputs=1,
-                                      family="Predictions")
-
-        with tf.Session() as sess:
-            summary = sess.run(summary_op)
-        # Write summary
-        writer = tf.summary.FileWriter(logdir="./logs/" + self.run_name)
-        writer.add_summary(summary, epoch)
-        writer.close()
-
-    def write_current_plot(self, epoch):
+    def write_current_cm(self, epoch):
         """
         Write confusion matrix to Tensorboard
         """
@@ -754,45 +891,87 @@ class Validation(Callback):
         matrix = self.cms[-1]
 
         # Prepare the plot
-        plot_buffer = write_confusion_matrix(matrix, list(self.classes))
+        plot_buffer = self.write_confusion_matrix_to_buffer(matrix, list(self.classes))
 
-        # Convert PNG buffer to TF image
-        image = tf.image.decode_png(plot_buffer.getvalue(), channels=4)
+        # Create an Image object
+        img_sum = tf.Summary.Image(encoded_image_string=plot_buffer.getvalue(),
+                                   height=800,
+                                   width=800)
+        # Create a Summary value
+        im_summary = tf.Summary.Value(image=img_sum, tag="Confusion_Matrix")
 
-        # Add the batch dimension
-        image = tf.expand_dims(image, 0)
+        summary = tf.Summary(value=[im_summary])
 
-        # Add image summary
-        summary_op = tf.summary.image("confusion_matrix_epoch_" + str(epoch),
-                                      image,
-                                      max_outputs=24,
-                                      family="Confusion Matrix")
+        self.writer.add_summary(summary, str(epoch))
 
-        with tf.Session() as sess:
-            summary = sess.run(summary_op)
-        # Write summary
-        writer = tf.summary.FileWriter(logdir="./logs/" + self.run_name)
-        writer.add_summary(summary, epoch)
-        writer.close()
-
-
-    def on_train_end(self, logs={}):
-        # 1. Print final confusion matrix
-        print()
-        print("Confusion Matrix (final epoch):")
+    def compute_stats(self, epoch_cm, logs):
+        """
+        Computes the precision and recall for
+        the epoch, and prints them.
+        """
+        # End of epoch - compute stats
+        print("Validation")
         for i in range(12):
-            for j in range(12):
-                print(self.cms[-1][i, j], end=", ")
-            print()
+            # Recall - TP / (TP + FN)
+            try:
+                precision = np.round(epoch_cm[i, i] / np.sum(epoch_cm[i, :]), 5)
+            except ZeroDivisionError:
+                precision = 0
+            # Update Logs
+            name = self.classes[i] + "_P"
+            print(self.classes[i], "P:", precision, end=" ")
+            logs[name] = precision
 
-    def on_epoch_end(self, epoch, logs={}):
+            # Precision - TP / (TP + FP)
+            try:
+                recall = np.round(epoch_cm[i, i] / np.sum(epoch_cm[:, i]), 5)
+            except ZeroDivisionError:
+                recall = 0
+            # Update Logs
+            name = self.classes[i] + "_R"
+            print("R:", recall)
+            logs[name] = recall
 
-        # Create new validation model
-        val_model = K.function(inputs=[self.model.input, K.learning_phase()], outputs=[self.model.output], )
+    def sample_predict(self, val_model, epoch):
+        """
+        Predict segmentation mask from the next
+        batch of images.
+        """
+        # Grab next batch
+        X, y_true, _ = next(self.validation_data)
 
-        # Confusion Matrix
-        epoch_cm = np.zeros((len(self.classes), len(self.classes)))
+        # Make prediction with model
+        learning_phase = 1
+        y_pred = val_model([X, learning_phase])[0]
 
+        # Reshape prediction
+        y_pred = y_pred.reshape(
+            y_pred.shape[0],  # batch_size
+            X[0].shape[0],  # dim
+            X[0].shape[1],  # dim
+            y_pred.shape[-1]  # number of classes
+        )
+
+        # Reshape ground-truth
+        y_true = y_true.reshape(
+            y_pred.shape[0],  # batch_size
+            X[0].shape[0],  # dim
+            X[0].shape[1],  # dim
+            y_pred.shape[-1]
+        )
+
+        # Loop through each image in batch
+        for i in range(y_pred.shape[0]):
+            # Create mask and prediction mask
+            mask, pred = np.argmax(y_true[i], axis=-1), np.argmax(y_pred[i], axis=-1)
+            # Save image i in batch
+            self.write_current_predict(mask, pred, "Pred_E", epoch)
+
+    def validate_epoch(self, val_model, epoch_cm):
+        """
+        Computes the batch validation confusion matrix
+        and then updates the epoch confusion matrix.
+        """
         # Loop through validation set
         for n in range(self.validation_steps):
 
@@ -824,206 +1003,63 @@ class Validation(Callback):
                 for j in all_classes:
                     epoch_cm[i, j] += batch_cm[all_classes.index(i), all_classes.index(j)]
 
-        # End of epoch - compute stats
-        print("Validation")
+    # End of helper functions ----------------------------------------- #
+
+    # Overloaded parent methods
+    def on_train_end(self, logs={}):
+        # 1. Print final confusion matrix
+        print()
+        print("Confusion Matrix (final epoch):")
         for i in range(12):
-            # Recall - TP / (TP + FN)
-            try:
-                precision = np.round(epoch_cm[i, i] / np.sum(epoch_cm[i, :]), 5)
-            except ZeroDivisionError:
-                precision = 0
-            # Update Logs
-            name = self.classes[i] + "_P"
-            print(self.classes[i], "P:", precision, end=" ")
-            logs[name] = precision
-
-            # Precision - TP / (TP + FP)
-            try:
-                recall = np.round(epoch_cm[i, i] / np.sum(epoch_cm[:, i]), 5)
-            except ZeroDivisionError:
-                recall = 0
-            # Update Logs
-            name = self.classes[i] + "_R"
-            print("R:", recall, end=" ")
-            logs[name] = recall
-
+            for j in range(12):
+                print(self.cms[-1][i, j], end=", ")
             print()
 
-        # PREDICT A SAMPLE OF IMAGES
+        # Predict whole images
+        if self.WSI:
 
-        # Grab next batch
-        X, y_true, _ = next(self.validation_data)
+            # Create prediction model
+            model_in = self.model.layers[0].get_input_at(0)
+            model_out = self.model.layers[-2].output
+            model = K.function(inputs=[model_in, K.learning_phase()], outputs=[model_out])
 
-        # Make prediction with model
-        learning_phase = 1
-        y_pred = val_model([X, learning_phase])[0]
+            files = [
+                "./WSI_test/images/histo_demo_1.tif",
+                "./WSI_test/images/histo_demo_2.tif",
+                "./WSI_test/images/histo_demo_3.tif"
+            ]
 
-        y_pred = y_pred.reshape(
-                            y_pred.shape[0],    # batch_size
-                            X[0].shape[0],  # dim
-                            X[0].shape[1],  # dim
-                            y_pred.shape[-1]    # number of classes
-                            )
-        y_true = y_true.reshape(
-                            y_pred.shape[0],  # batch_size
-                            X[0].shape[0],  # dim
-                            X[0].shape[1],  # dim
-                            y_pred.shape[-1]
-                            )
+            whole_image_predict(files, model, "./WSI_test/segmentations/", self.color_list)
 
-        # Loop through each image in batch                )
-        for i in range(y_pred.shape[0]):
-            mask, pred = np.argmax(y_true[i], axis=-1), np.argmax(y_pred[i], axis=-1)
+    def on_epoch_end(self, epoch, logs={}):
 
-            self.write_predict_plot(mask, pred, "Pred_E", epoch)
+        # Create new validation model
+        val_model = K.function(inputs=[self.model.input, K.learning_phase()], outputs=[self.model.output], )
+
+        # Confusion Matrix
+        epoch_cm = np.zeros((len(self.classes), len(self.classes)))
+
+        # Loop through validation data and update epoch_cm
+        self.validate_epoch(val_model, epoch_cm)
+
+        # Compute stats
+        self.compute_stats(epoch_cm, logs)
+        # Save epoch CM
+        self.cms.append(epoch_cm)
+
+        # Predict segmentation mask for a sample of images
+        self.sample_predict(val_model, epoch)
+
+        # Write confusion matrix to tensorboard
+        self.write_current_cm(epoch)
 
         # Clear memory of val model
         del val_model
-        self.cms.append(epoch_cm)
 
-        # Write confusion matrix to tensorboard
-        self.write_current_plot(epoch)
-
-        return
-
-
-class Test(Callback):
-    """
-    A custom callback to perform testing at the
-    end of the whole training run. Also writes useful class
-    metrics to tensorboard logs.
-    """
-
-    def __init__(self, generator, steps, classes):
-        """
-
-        Initialises the callback
-
-        Input:
-
-            generator -  validation generator of type segmentationGen()
-
-            steps - number of steps in validation e.g. n // batch_size
-        """
-        self.test_data = generator
-        self.test_steps = steps
-        self.classes = classes
-
-    def on_train_end(self, epoch, logs={}):
+        # Call parent class method - Tensorboard writer
+        super().on_epoch_end(epoch, logs)
 
         return
 
 
 # ------------------------------------------------------------------------------------------ #
-# ------------------------------------------------------------------------------------------ #
-
-
-if __name__ == "__main__":
-
-    # -------------------------- #
-    # Build a demo model to test #
-    # -------------------------- #
-    def demoModel(dim, num_classes):
-        """
-        Builds a simple encoder decoder network - don't be too impresssed!
-        """
-        import numpy as np
-        from keras.models import Sequential, Model
-        from keras.layers import Input
-        from keras.layers import Conv2D, ZeroPadding2D, MaxPooling2D, Conv2DTranspose, Cropping2D
-        from keras.layers import concatenate, UpSampling2D, Reshape
-        import keras.backend as K
-
-        # Build model
-        input_image = Input(shape=(dim, dim, 3))
-
-        conv = Conv2D(24, (3, 3), activation='relu', padding='same')(input_image)
-
-        pool = MaxPooling2D((2, 2), strides=(2, 2), name="pool")(conv)
-
-        conv1x1 = Conv2D(24, (1, 1), padding='same', activation='relu')(pool)
-
-        up = UpSampling2D(size=(2, 2))(conv1x1)
-        up_conv = Conv2D(24, 2, activation='relu', padding='same')(up)
-        merge = concatenate([conv, up_conv], axis=3)
-
-        conv = Conv2D(12, 3, activation='relu', padding='same')(merge)
-
-        activation = Conv2D(num_classes, (1, 1), activation="softmax")(conv)
-
-        # need to reshape for training
-        output = Reshape((dim * dim, 3))(activation)
-
-        model = Model(inputs=[input_image], outputs=output)
-
-        model.summary()
-
-        return model
-
-
-    # SET RANDOM SEED ---- |
-    from numpy.random import seed
-    seed(1)
-    from tensorflow import set_random_seed
-    set_random_seed(2)
-    # -------------------- |
-
-    from keras.optimizers import SGD
-    import matplotlib.pyplot as plt
-
-    # Directory Setup
-    base_dir = "./Demo_Images/"
-    train_dir = os.path.join(base_dir, "train")
-    test_dir = os.path.join(base_dir, "test")
-    X_dir = os.path.join(train_dir, "img")
-    y_dir = os.path.join(train_dir, "tag")
-    X_val_dir = os.path.join(test_dir, "img")
-    y_val_dir = os.path.join(test_dir, "tag")
-
-    # Batch Size
-    batch_size = 5
-
-    # Color Palette
-    colours = [(17, 16, 16),(0, 255, 0), (255, 0, 0)]
-    palette = Palette(colours)
-
-    # Model parameters
-    num_classes = len(palette)
-    dim = 128
-
-    # Create Generators 
-    train_gen = segmentationGen(batch_size, X_dir, y_dir, palette,
-                                x_dim=dim, y_dim=dim, suffix=".jpg")
-    val_gen = segmentationGen(batch_size, X_val_dir, y_val_dir,
-                              palette,x_dim=dim, y_dim=dim, suffix=".jpg")
-
-    # build demo model
-    model = demoModel(dim, num_classes)
-
-    # Compile model - include sampe_weights_mode="temporal"
-    model.compile(optimizer=SGD(
-            lr=0.001),
-            loss="categorical_crossentropy",
-            sample_weight_mode="temporal",
-            metrics=["accuracy"])
-
-    # Train
-    history = model.fit_generator(
-        epochs=5,
-        generator=train_gen,
-        steps_per_epoch=20 // batch_size,
-        validation_data=val_gen,
-        validation_steps=2)
-
-    # Predict raw image
-    im = io.imread(os.path.join(X_dir, "1.jpg"))
-    im = resize(im, (dim, dim))
-    preds, class_img = predict_image(model, im)
-
-    plt.imshow(class_img)
-    plt.show()
-
-
-
-
-

@@ -7,7 +7,7 @@ Author: Simon Thomas
 Email: simon.thomas@uq.edu.au
 
 Start Date: 09/01/19
-Last Update: 24/01/19
+Last Update: 10/01/19
 
     Python v3.6:
         For less than 12 classes the python interpreter must be >=3.6. This is purely
@@ -58,7 +58,7 @@ parser.add_argument("--log_dir", type=str, default="logs", help="Path to tensorb
 parser.add_argument("--data_dir", type=str, default="./data/", help="Path to data directory")
 parser.add_argument("--output_dir", type=str, default="./", help="Path to output directory")
 parser.add_argument("--classes", type=str, nargs="+", default=None, help="Not yet implemented")
-parser.add_argument("--weight_mod", nargs="*", default=None, type=str, help="Class loss weight modifications")
+parser.add_argument("--weight_mod", nargs="*", default="F", type=str, help="Class loss weight modifications")
 parser.set_defaults(fine_tune=False)
 args = parser.parse_args()
 
@@ -81,7 +81,7 @@ weight_mod = args.weight_mod
 run_name = str(data_dir.split("/")[-2]) + "_BS_" + str(batch_size) + \
            "_PS_" + str(dim) + "_C_" + str(num_classes) + \
            "_FT_" + str(fine_tune) + "_E_" + str(epochs) + \
-           "_LR_" + str(learning_rate) + "_WM_" + ("_".join(weight_mod) or str(None))
+           "_LR_" + str(learning_rate) + "_WM_" + "_".join(weight_mod)
 
 print("[INFO] hyper-parameter details ...")
 print("Run Name:", run_name)
@@ -94,12 +94,15 @@ print("Num Classes:", num_classes)
 print("GPUS:", gpus)
 print("Fine-Tune:", fine_tune)
 print("Data:", data_dir)
-print("Weight Mod:", "_".join(weight_mod) or str(None))
+print("Weight Mod:", "_".join(weight_mod))
 
 # Path & Directory Setup
 os.system("mkdir -p " + log_dir)
 os.system("mkdir -p " + log_dir + "/" + run_name)
 os.system("mkdir -p weights")
+os.system("mkdir -p WSI_test")
+os.system("mkdir -p WSI_test/images")
+os.system("mkdir -p WSI_test/segmentations")
 
 # training
 X_train_dir = os.path.join(data_dir, "X_train")
@@ -136,13 +139,16 @@ if not classes:
 palette = Palette(colors)
 
 # Create weight_mod dictionary
-if weight_mod:
+if weight_mod != "F":
     keys = [classes.index(tissue_class) for tissue_class in args.weight_mod[0::2]]
     values = [float(val) for val in args.weight_mod[1::2]]
     weight_mod = dict(zip(keys, values))
     print("Modifying weight balances:")
     for key, value in zip(args.weight_mod[0::2], values):
         print(key, value)
+else:
+    # Change to boolean value
+    weight_mod = None
 
 # Create generators
 train_gen = segmentationGen(
@@ -203,9 +209,11 @@ model.compile(
 # Create Callbacks
 callback_list = [
                     Validation(generator=val_gen, steps=val_n // batch_size,
-                               classes=classes, run_name=run_name, color_list=colors),
-
-                    TensorBoard(log_dir=log_dir + "/" + run_name)
+                               classes=classes, run_name=run_name,
+                               color_list=colors,
+                               write_graph=False,
+                               WSI=False,
+                               log_dir=log_dir + "/" + run_name),
                 ]
 
 # Train
@@ -215,6 +223,8 @@ history = model.fit_generator(
                         steps_per_epoch=train_n // batch_size,
                         callbacks=callback_list,
                         )
+
+
 
 # Save weights
 weight_path = "./weights/" + run_name + ".h5"
