@@ -81,10 +81,8 @@ class Palette(object):
         return len(self.colors.keys())
 
 
-def segmentationGen(
-                    batch_size, X_dir, y_dir,
-                    palette, x_dim, y_dim,
-                    suffix=".png", weight_mod=None):
+class SegmentationGen(object):
+
     """
     A generator that returns X, y & sampe_weight data in designated batch sizes,
     specifically for segmentation problems. It converts y images 2D arrays
@@ -116,9 +114,9 @@ def segmentationGen(
         >>> # Train
         ... history = model.fit_generator(
         ...                 generator = train_gen,
-        ...                 steps_per_epoch = train_n // batch_size
+        ...                 steps_per_epoch = train_gen.n // batch_size
         ...                 validation_data = val_gen,
-        ...                 validation_steps = val_n // batch_size )
+        ...                 validation_steps = val_gen.n // batch_size )
         >>> # Evaluate
         ... loss, acc = model.evaluate_generator(
         ...                 generator = test_gen,
@@ -152,8 +150,29 @@ def segmentationGen(
             X_train.shape = (batch_size, image_size, dim, 3)
             y_train.shape = (batch_size, image_size, dim, num_classes)
     """
+    def __init__(self,
+                    batch_size, X_dir, y_dir,
+                    palette, x_dim, y_dim,
+                    suffix=".png", weight_mod=None):
+
+        self.batch_size = batch_size
+        self.X_dir = X_dir
+        self.y_dir = y_dir
+        self.palette = palette
+        self.x_dim = x_dim
+        self.y_dim = y_dim
+        self.suffix = suffix
+        self.weight_mod = weight_mod
+        self.files = np.array(os.listdir(X_dir))
+        self.num_classes = len(palette)
+        self.n = len(self.files)
+        self.cur = 0
+        self.order = list(range(self.n))
+        np.random.shuffle(self.order)
+        self.files_in_batch = None
+
     # Helper functions
-    def _getClassMask(rgb, im):
+    def _getClassMask(self, rgb, image):
         """
         Takes an rgb tuple and returns a binary mask of size
         im.shape[0] x im.shape[1] indicated where each color
@@ -162,23 +181,24 @@ def segmentationGen(
         Input:
             rgb - tuple of (r, g, b)
 
-            im - segmentation ground truth image
+            image - segmentation ground truth image
 
         Output:
             mask - binary mask
         """
         # Colour mask
         if len(rgb) == 3:
-            r, g, b = rgb
-            r_mask = im[:,:, 0] == r
-            g_mask = im[:,:, 1] == g
-            b_mask = im[:,:, 2] == b
-            mask = r_mask & g_mask & b_mask
-            return mask
+            return np.all(image == rgb, axis=-1)
+            #r, g, b = rgb
+            #r_mask = im[:,:, 0] == r
+            #g_mask = im[:,:, 1] == g
+            #b_mask = im[:,:, 2] == b
+            #mask = r_mask & g_mask & b_mask
+            #return mask
         # 8-bit mask
-        return im[:,:] == rgb
+        return image[:, :] == rgb
 
-    def _calculateWeights(y_train):
+    def _calculateWeights(self, y_train):
         """
         Calculates the balanced weights of all the classes
         in the batch.
@@ -191,7 +211,7 @@ def segmentationGen(
         """
         class_counts = []
         # loop through each class
-        for i in range(num_classes):
+        for i in range(self.num_classes):
             batch_count = 0
             # Sum up each class count in each batch image
             for b in range(y_train.shape[0]):
@@ -202,7 +222,7 @@ def segmentationGen(
         y = []
         present_classes = []
         absent_classes = []
-        for i in range(num_classes):
+        for i in range(self.num_classes):
             # Adjusts for absence
             if class_counts[i] == 0:
                 absent_classes.append(i)
@@ -216,13 +236,13 @@ def segmentationGen(
             weights = np.insert(weights, c, 0)
 
         # Modify weight for a particular class
-        if weight_mod:
-            for key in weight_mod.keys():
-                weights[key] *= weight_mod[key]
+        if self.weight_mod:
+            for key in self.weight_mod.keys():
+                weights[key] *= self.weight_mod[key]
 
         return weights
 
-    def _createBatches(positions):
+    def _createBatches(self, positions):
         """
         Creates X_train and y_train batches from the given
         positions i.e. files in the directory
@@ -237,25 +257,28 @@ def segmentationGen(
         X_batch = []
         y_batch = []
 
+        # Save file names for batch
+        self.files_in_batch = self.files[positions]
+
         # Loop through current batch
         for pos in positions:
             # Get image name
-            fname = files[pos][:-4]
+            fname = self.files[pos][:-4]
 
             # load X-image
-            im = io.imread(os.path.join(X_dir, fname + suffix))[:,:,0:3]    # drop alpha
-            im = resize(im, (x_dim, x_dim))
+            im = io.imread(os.path.join(self.X_dir, fname + self.suffix))[:,:,0:3]    # drop alpha
+            im = resize(im, (self.x_dim, self.x_dim))
             X_batch.append(im)
 
             # Load y-image
-            im = io.imread(os.path.join(y_dir, fname + ".png"))[:,:,0:3]    # drop alpha
-            im = resize(im, (y_dim, y_dim))
+            im = io.imread(os.path.join(self.y_dir, fname + ".png"))[:,:,0:3]    # drop alpha
+            im = resize(im, (self.y_dim, self.y_dim))
             # Convert to 3D ground truth
-            y = np.zeros((im.shape[0], im.shape[1], num_classes), dtype=np.float32)
+            y = np.zeros((im.shape[0], im.shape[1], self.num_classes), dtype=np.float32)
             # Loop through colors in palette and assign to new array
-            for i in range(num_classes):
-                rgb = palette[i]
-                mask = _getClassMask(rgb, im)
+            for i in range(self.num_classes):
+                rgb = self.palette[i]
+                mask = self._getClassMask(rgb, im)
                 y[mask, i] = 1.
 
             y_batch.append(y)
@@ -270,63 +293,44 @@ def segmentationGen(
         X_train *= 2.
 
         # Calculate sample weights
-        weights = _calculateWeights(y_train)
-        # Modify weights
-        if weight_mod:
-            for i in weight_mod:
-                weights[i] *= weight_mod[i]
+        weights = self._calculateWeights(y_train)
 
         # Take weight for each correct position
         sample_weights = np.take(weights, np.argmax(y_train, axis=-1))
 
         # Reshape to suit keras
-        sample_weights = sample_weights.reshape(y_train.shape[0], y_dim*y_dim)
+        sample_weights = sample_weights.reshape(y_train.shape[0], self.y_dim*self.y_dim)
         y_train = y_train.reshape(y_train.shape[0],
-                                  y_dim*y_dim,
-                                  num_classes)
+                                  self.y_dim*self.y_dim,
+                                  self.num_classes)
 
         return X_train, y_train, sample_weights
 
-    # -----------------------------------------------------------------------------#
-    #                                   RUN
-    # -----------------------------------------------------------------------------#
+    def __next__(self):
+        """
+        Returns a batch when the `next()` function is called on it.
+        """
+        while True:
 
-    files = os.listdir(X_dir)
-    num_classes = len(palette)
-    n = len(files)
-    cur = 0
-    order = list(range(n))
-    np.random.shuffle(order)
+            # Most batches will be equal to batch_size
+            if self.cur < (self.n - self.batch_size):
+                # Get positions of files in batch
+                positions = self.order[self.cur:self.cur + self.batch_size]
 
-    while True:
-        # Reset
-        if cur == n:
-            np.random.shuffle(order)
-            cur = 0
+                self.cur += self.batch_size
 
-        # Most batches will be equal to batch_size
-        if cur < (n - batch_size):
-            # Get positions of files in batch
-            positions = order[cur:cur + batch_size]
+                # create Batches
+                X_train, y_train, sample_weights = self._createBatches(positions)
 
-            cur += batch_size
+                return (X_train, y_train, sample_weights)
 
-            # create Batches
-            X_train, y_train, sample_weights = _createBatches(positions)
+            # Final batch is smaller than batch_size
+            else:
+                # Have sufficient data in each batch is good on multi-GPUs
+                np.random.shuffle(self.order)
+                self.cur = 0
+                continue
 
-            yield (X_train, y_train, sample_weights)
-
-        # Final batch is smaller than batch_size
-        else:
-            positions = order[cur::]
-
-            # Step is maximum
-            cur = n
-
-            # Create Batches
-            X_train, y_train, sample_weights = _createBatches(positions)
-
-            yield (X_train, y_train, sample_weights)
 
 
 def predict_image(model, image):
@@ -454,7 +458,14 @@ def set_weights_for_training(model, fine_tune, layer_num=[81, 174]):
         print("[INFO] base model...")
         # ResNet layers
         for layer in model.layers[0:layer_num[1]]:
-            layer.trainable = False
+            # Opens up mean and variance for training
+            if hasattr(layer, 'moving_mean') and hasattr(layer, 'moving_variance'):
+                layer.trainable = True
+                K.eval(K.update(layer.moving_mean, K.zeros_like(layer.moving_mean)))
+                K.eval(K.update(layer.moving_variance, K.zeros_like(layer.moving_variance)))
+            else:
+                layer.trainable = False
+
         # UNet layers
         for layer in model.layers[layer_num[1]::]:
             layer.trainable = True
@@ -463,6 +474,10 @@ def set_weights_for_training(model, fine_tune, layer_num=[81, 174]):
         # ResNet layers
         for layer in model.layers[layer_num[0]:layer_num[1]]:
             layer.trainable = True
+            # Opens up mean and variance for training
+            if hasattr(layer, 'moving_mean') and hasattr(layer, 'moving_variance'):
+                K.eval(K.update(layer.moving_mean, K.zeros_like(layer.moving_mean)))
+                K.eval(K.update(layer.moving_variance, K.zeros_like(layer.moving_variance)))
         # UNet layers
         for layer in model.layers[layer_num[1]::]:
             layer.trainable = True
@@ -515,7 +530,6 @@ def load_multigpu_checkpoint_weights(model, h5py_file):
 
             try:
                 weights = []
-
                 # Extract weights
                 for term in layer_weights:
                     if isinstance(layer_weights[term], h5py.Dataset):
@@ -646,7 +660,7 @@ def calculate_tile_size(image_shape, lower=50, upper=150):
 
         threshold - calculated overlap for tile and input image
     """
-    dims = [x * 2 ** 5 for x in range(1, 80, 2)]
+    dims = [x*(2**5) for x in range(16, 45)]
     w = image_shape[1]
     h = image_shape[0]
     thresholds = {}
@@ -658,14 +672,16 @@ def calculate_tile_size(image_shape, lower=50, upper=150):
         # Threshold is the half the minimum overlap
         thresholds[d] = min(w_overlap, h_overlap) // 2
     # Loop through pairs and take first that satisfies
-    for d, t in sorted(thresholds.items(), key=lambda x: x[1]):
+    sorted_thresholds = sorted(thresholds.items(), key=lambda x: x[1])
+    for d, t in sorted_thresholds:
         if lower < t < upper:
-            if d <= 1408:
-                return d, t  # dim, threshold
-    d = dims[len(dims) // 2]
-    return d, thresholds[d]
+                return w, h, d, t  # dim, threshold
+    # Else - get largest overlap value
+    print("[INFO] - title overlap threshold not met. Defaulting to largest.")
+    return w, h, sorted_thresholds[-1][0], sorted_thresholds[-1][1]
 
-def whole_image_predict(files, model, output_directory, colors):
+
+def whole_image_predict(files, model, output_directory, colors, compare=True):
     """
     Generates a segmentation mask for each of the images in files
     and saves them in the output directory.
@@ -702,9 +718,7 @@ def whole_image_predict(files, model, output_directory, colors):
             canvas = np.zeros_like(histo)
 
             # Tile info
-            w = histo.shape[1]
-            h = histo.shape[0]
-            dim, threshold = calculate_tile_size(histo.shape, lower=50, upper=100)
+            w, h, dim, threshold = calculate_tile_size(histo.shape, lower=50, upper=100)
 
             print("Tile size:", dim)
             print("Tile threshold:", threshold)
@@ -741,8 +755,7 @@ def whole_image_predict(files, model, output_directory, colors):
                     tile = resize(tile[0], dsize=(dim, dim))[np.newaxis, ::]
 
                 # Predict
-                learning_phase = 1
-                probs = model([tile, learning_phase])[0]    # returns list by default
+                probs = model([tile])[0]
                 class_pred = np.argmax(probs[0], axis=-1)
 
                 segmentation = apply_color_map(colors, class_pred)
@@ -763,14 +776,32 @@ def whole_image_predict(files, model, output_directory, colors):
 
         # Save Segmentation
         fname = output_directory + name + "_WSI_" + str(dim) + "px.png"
-        # Scale values to RGB
-        canvas *= 255.
-        # Convert canvas to BGR color space for cv2
-        canvas = cvtColor(canvas, COLOR_RGB2BGR)
-        imwrite(fname, canvas)
 
-        # Wipe canvas from memory
-        del canvas
+
+        if compare:
+            # Load in ground truth
+            file = "/".join(file.split("/")[0:-2]) + "/Masks/" + name + ".png"
+            mask = io.imread(file)
+            fig, axes = plt.subplots(1, 2, figsize=(20, 20))
+            axes[0].imshow(mask)
+            axes[0].set_title("Ground Truth")
+            axes[1].imshow(canvas)
+            axes[1].set_title("Predicted")
+            plt.savefig(fname)
+            plt.close()
+            # Wipe canvas from memory
+            del canvas
+
+        else:
+            # Scale values to RGB
+            canvas *= 255.
+            # Convert canvas to BGR color space for cv2.imwrite
+            canvas = cvtColor(canvas, COLOR_RGB2BGR)
+            print("saving...", fname)
+            imwrite(fname, canvas)
+
+            # Wipe canvas from memory
+            del canvas
 
 class Validation(TensorBoard):
     """
@@ -779,14 +810,17 @@ class Validation(TensorBoard):
     metrics to tensorboard logs.
     """
 
-    def __init__(self, generator, steps, classes, run_name, color_list, WSI=False, **kwargs):
+    def __init__(self, generator, steps, classes, run_name,
+                 color_list, WSI=False, model_to_save=None,
+                 weight_path=None, interval=5,
+                 **kwargs):
         """
 
         Initialises the callback
 
         Input:
 
-            generator -  validation generator of type segmentationGen()
+            generator -  validation generator of type SegmentationGen()
 
             steps - number of steps in validation e.g. n // batch_size
 
@@ -795,6 +829,9 @@ class Validation(TensorBoard):
             run_name - str of the unique run identifier
 
             color_list - list of RGB values for applying colors to predictions
+
+            model_to_save - model to save weights as checkpoint (useful for multi-GPU models)
+                            where the model passed should be the non-parallel model.
 
             log_dir - Tensorboard log directory
         """
@@ -806,6 +843,9 @@ class Validation(TensorBoard):
         self.run_name = run_name
         self.color_list = color_list
         self.WSI = WSI
+        self.model_to_save = model_to_save
+        self.weight_path = weight_path
+        self.interval = interval
 
     # Helper functions ------------------------------------------------ #
 
@@ -853,10 +893,11 @@ class Validation(TensorBoard):
         buffer = IO.BytesIO()
         plt.savefig(buffer, format="png")
         buffer.seek(0)
-        # plt.show()
+        plt.close(fig)
+
         return buffer
 
-    def write_current_predict(self, mask, prediction, name, epoch):
+    def write_current_predict(self, mask, prediction, image_num, epoch):
         """
         Write mask and prediction to Tensorboard
         """
@@ -872,13 +913,14 @@ class Validation(TensorBoard):
         plot_buffer = IO.BytesIO()
         plt.savefig(plot_buffer, format="png")
         plot_buffer.seek(0)
+        plt.close(fig)
 
         # Create an Image object
         img_sum = tf.Summary.Image(encoded_image_string=plot_buffer.getvalue(),
                                    height=mask.shape[0],
                                    width=mask.shape[1])
         # Create a Summary value
-        im_summary = tf.Summary.Value(image=img_sum, tag="Segmentation")
+        im_summary = tf.Summary.Value(image=img_sum, tag="Segmentation/Segmentation_E_" + str(epoch))
 
         summary = tf.Summary(value=[im_summary])
         self.writer.add_summary(summary, str(epoch))
@@ -910,11 +952,14 @@ class Validation(TensorBoard):
         the epoch, and prints them.
         """
         # End of epoch - compute stats
+        val_weighted_acc = []
+        weighted_F1 = []
         print("Validation")
         for i in range(12):
-            # Recall - TP / (TP + FN)
+
+            # Precision - TP / (TP + FP)
             try:
-                precision = np.round(epoch_cm[i, i] / np.sum(epoch_cm[i, :]), 5)
+                precision = np.round(epoch_cm[i, i] / np.sum(epoch_cm[:, i]), 5)
             except ZeroDivisionError:
                 precision = 0
             # Update Logs
@@ -922,15 +967,32 @@ class Validation(TensorBoard):
             print(self.classes[i], "P:", precision, end=" ")
             logs[name] = precision
 
-            # Precision - TP / (TP + FP)
+            # Recall - TP / (TP + FN)
             try:
-                recall = np.round(epoch_cm[i, i] / np.sum(epoch_cm[:, i]), 5)
+                recall = np.round(epoch_cm[i, i] / np.sum(epoch_cm[i, :]), 5)
             except ZeroDivisionError:
                 recall = 0
             # Update Logs
             name = self.classes[i] + "_R"
             print("R:", recall)
             logs[name] = recall
+            val_weighted_acc.append(recall)
+
+            # F1 - score
+            F1 = 2 * ((precision*recall) / (precision + recall))
+            weighted_F1.append(F1)
+
+        # update weighed average
+        #epoch_val_weighted_acc = np.nanmean(val_weighted_acc)
+        #epoch_weighted_F1 = np.nanmean(weighted_F1)
+        #print("Weighted Val Acc:", epoch_val_weighted_acc)
+        #print("Weighted F1:", epoch_weighted_F1)
+
+        # Add to logs
+        #logs["val_weighted_acc"] = epoch_val_weighted_acc
+        #logs["val_weights_F1"] = epoch_weighted_F1
+
+
 
     def sample_predict(self, val_model, epoch):
         """
@@ -965,7 +1027,7 @@ class Validation(TensorBoard):
             # Create mask and prediction mask
             mask, pred = np.argmax(y_true[i], axis=-1), np.argmax(y_pred[i], axis=-1)
             # Save image i in batch
-            self.write_current_predict(mask, pred, "Pred_E", epoch)
+            self.write_current_predict(mask, pred, i, epoch)
 
     def validate_epoch(self, val_model, epoch_cm):
         """
@@ -979,8 +1041,7 @@ class Validation(TensorBoard):
             X, y_true, _ = next(self.validation_data)
 
             # Make prediction with model
-            learning_phase = 1
-            y_pred = val_model([X, learning_phase])
+            y_pred = val_model([X])[0]
 
             # Find highest classes prediction
             y_true = np.argmax(y_true, axis=-1)
@@ -1015,26 +1076,26 @@ class Validation(TensorBoard):
                 print(self.cms[-1][i, j], end=", ")
             print()
 
-        # Predict whole images
-        if self.WSI:
-
-            # Create prediction model
-            model_in = self.model.layers[0].get_input_at(0)
-            model_out = self.model.layers[-2].output
-            model = K.function(inputs=[model_in, K.learning_phase()], outputs=[model_out])
-
-            files = [
-                "./WSI_test/images/histo_demo_1.tif",
-                "./WSI_test/images/histo_demo_2.tif",
-                "./WSI_test/images/histo_demo_3.tif"
-            ]
-
-            whole_image_predict(files, model, "./WSI_test/segmentations/", self.color_list)
+        # # Predict whole images
+        # if self.WSI:
+        #
+        #     # Create prediction model
+        #     model_in = self.model.layers[0].get_input_at(0)
+        #     model_out = self.model.layers[-2].output
+        #     model = K.function(inputs=[model_in, K.learning_phase()], outputs=[model_out])
+        #
+        #     files = [
+        #         "./WSI_test/images/histo_demo_1.tif",
+        #         "./WSI_test/images/histo_demo_2.tif",
+        #         "./WSI_test/images/histo_demo_3.tif"
+        #     ]
+        #
+        #     whole_image_predict(files, model, "./WSI_test/segmentations/", self.color_list)
 
     def on_epoch_end(self, epoch, logs={}):
 
         # Create new validation model
-        val_model = K.function(inputs=[self.model.input, K.learning_phase()], outputs=[self.model.output], )
+        val_model = K.function(inputs=[self.model.input], outputs=[self.model.output], )
 
         # Confusion Matrix
         epoch_cm = np.zeros((len(self.classes), len(self.classes)))
@@ -1058,6 +1119,13 @@ class Validation(TensorBoard):
 
         # Call parent class method - Tensorboard writer
         super().on_epoch_end(epoch, logs)
+
+        # Save weights for model checkpoint
+        if epoch % self.interval == 0 and epoch != 0:
+            if self.model_to_save:
+                weight_name = self.weight_path.format(epoch=epoch)
+                print("Saving model checkpoint:", weight_name)
+                self.model_to_save.save_weights(weight_name)
 
         return
 

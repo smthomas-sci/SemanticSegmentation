@@ -7,7 +7,7 @@ Author: Simon Thomas
 Email: simon.thomas@uq.edu.au
 
 Start Date: 09/01/19
-Last Update: 10/01/19
+Last Update: 11/03/19
 
     Python v3.6:
         For less than 12 classes the python interpreter must be >=3.6. This is purely
@@ -23,25 +23,29 @@ Last Update: 10/01/19
         --dim 512 --num_classes 12 --gpus 1  --log_dir ./logs/ --data data/ \
         --fine_tune --weights ./weights/BS_1_PS_512_C_12_FT_True_E_10_LR_0.001.h5
 
+
+# Notes about learning phase
+https://blog.keras.io/keras-as-a-simplified-interface-to-tensorflow-tutorial.html
+
+
 """
 
 import argparse
 
-import tensorflow as tf
 from keras.optimizers import Adam
 from keras.utils.training_utils import multi_gpu_model
-from keras.callbacks import TensorBoard
-import keras.backend as K
-from keras.callbacks import Callback
 
 from seg_utils import *
-from seg_models import ResNet_UNet
+from seg_models import ResNet_UNet, ResNet_UNet_ExtraConv, ResNet_UNet_More_Params
+from seg_models import ResNet_UNet_BN, ResNet_UNet_Dropout, ResNet_UNet_Reg
 
-from numpy.random import seed
-from tensorflow import set_random_seed
+from numpy.random import seed as set_np_seed
+from tensorflow import set_random_seed as set_tf_seed
+
 # Set seed
-seed(1)
-set_random_seed(2)
+seed = 1
+set_np_seed(seed)
+set_tf_seed(seed)
 
 
 # Argparse setup
@@ -76,13 +80,21 @@ data_dir = args.data_dir
 output_dir = args.output_dir
 classes = args.classes
 weight_mod = args.weight_mod
+model_type = ResNet_UNet
+
 
 # Create unique run name
 run_name = str(data_dir.split("/")[-2]) + "_BS_" + str(batch_size) + \
            "_PS_" + str(dim) + "_C_" + str(num_classes) + \
            "_FT_" + str(fine_tune) + "_E_" + str(epochs) + \
-           "_LR_" + str(learning_rate) + "_WM_" + "_".join(weight_mod)
+           "_LR_" + str(learning_rate) + "_WM_" + "_".join(weight_mod) + \
+           "model_" + str(model_type).split(" ")[1] + "_less_params_all_12"
 
+dropout = None
+if dropout:
+    run_name += "_DO_" + str(dropout)
+
+print("[INF0] - random seed -", seed)
 print("[INFO] hyper-parameter details ...")
 print("Run Name:", run_name)
 print("Batch Size:", batch_size)
@@ -104,15 +116,18 @@ os.system("mkdir -p WSI_test")
 os.system("mkdir -p WSI_test/images")
 os.system("mkdir -p WSI_test/segmentations")
 
-# training
+# Training
 X_train_dir = os.path.join(data_dir, "X_train")
 y_train_dir = os.path.join(data_dir, "y_train")
-train_n = get_number_of_images(X_train_dir)
 
-# training
-X_val_dir = os.path.join(data_dir, "X_train")
-y_val_dir = os.path.join(data_dir, "y_train")
-val_n = get_number_of_images(X_val_dir)
+# Validation
+X_val_dir = os.path.join(data_dir, "X_val")
+y_val_dir = os.path.join(data_dir, "y_val")
+
+# Test
+X_val_dir = os.path.join(data_dir, "X_test")
+y_val_dir = os.path.join(data_dir, "y_test")
+
 
 # Create color palette
 color_dict = {
@@ -151,14 +166,14 @@ else:
     weight_mod = None
 
 # Create generators
-train_gen = segmentationGen(
+train_gen = SegmentationGen(
                 batch_size, X_train_dir,
                 y_train_dir, palette,
                 x_dim=dim, y_dim=dim,
                 weight_mod=weight_mod
                 )
 
-val_gen = segmentationGen(
+val_gen = SegmentationGen(
                 batch_size, X_val_dir,
                 y_val_dir, palette,
                 x_dim=dim, y_dim=dim,
@@ -171,7 +186,7 @@ if gpus > 1:
     # then combine the results from the gradient updates from the CPU
     with tf.device("/cpu:0"):
         # Import model
-        orig_model = ResNet_UNet(dim=dim, num_classes=num_classes)
+        orig_model = model_type(dim=dim, num_classes=num_classes)
 
         # Load pre-trained weights
         if weights:
@@ -187,7 +202,7 @@ else:
     print("[INFO] training with 1 GPU...")
 
     # Import model for single GPU
-    model = ResNet_UNet(dim=dim, num_classes=num_classes)
+    model = model_type(dim=dim, num_classes=num_classes)
 
     # Load pre-trained weights
     if weights:
@@ -207,12 +222,20 @@ model.compile(
             )
 
 # Create Callbacks
+if gpus > 1:
+    model_to_save = orig_model
+else:
+    model_to_save = model
+
 callback_list = [
-                    Validation(generator=val_gen, steps=val_n // batch_size,
+                    Validation(generator=val_gen,
+                               steps=100,  # val_gen.n // val_gen.batch_size,
                                classes=classes, run_name=run_name,
                                color_list=colors,
                                write_graph=False,
                                WSI=False,
+                               model_to_save=model_to_save,
+                               weight_path="./weights/" + run_name + "_checkpoint_{epoch:03d}.h5",
                                log_dir=log_dir + "/" + run_name),
                 ]
 
@@ -220,11 +243,11 @@ callback_list = [
 history = model.fit_generator(
                         epochs=epochs,
                         generator=train_gen,
-                        steps_per_epoch=train_n // batch_size,
+                        steps_per_epoch=train_gen.n // train_gen.batch_size,
+                        validation_data=val_gen,
+                        validation_steps=val_gen.n // val_gen.batch_size,
                         callbacks=callback_list,
                         )
-
-
 
 # Save weights
 weight_path = "./weights/" + run_name + ".h5"
@@ -233,7 +256,6 @@ if gpus > 1:
     orig_model.save_weights(weight_path)
 else:
     model.save_weights(weight_path)
-
 
 print("Finished.")
 
