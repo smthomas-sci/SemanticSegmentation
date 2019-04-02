@@ -53,8 +53,6 @@ orange = tuple([ val / 255. for val in [255,69,0] ])
 count = 0
 
 
-print(len(cols), len(rows))
-
 for i in range(0,max_col-dim,50):
 
     # Grab tile

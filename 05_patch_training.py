@@ -37,7 +37,7 @@ from keras.utils.training_utils import multi_gpu_model
 
 from seg_utils import *
 from seg_models import ResNet_UNet, ResNet_UNet_ExtraConv, ResNet_UNet_More_Params
-from seg_models import ResNet_UNet_BN, ResNet_UNet_Dropout, ResNet_UNet_Reg
+from seg_models import ResNet_UNet_BN, ResNet_UNet_Dropout, ResNet_UNet_Reg, UNet
 
 from numpy.random import seed as set_np_seed
 from tensorflow import set_random_seed as set_tf_seed
@@ -80,7 +80,7 @@ data_dir = args.data_dir
 output_dir = args.output_dir
 classes = args.classes
 weight_mod = args.weight_mod
-model_type = ResNet_UNet
+model_type = UNet
 
 
 # Create unique run name
@@ -88,7 +88,7 @@ run_name = str(data_dir.split("/")[-2]) + "_BS_" + str(batch_size) + \
            "_PS_" + str(dim) + "_C_" + str(num_classes) + \
            "_FT_" + str(fine_tune) + "_E_" + str(epochs) + \
            "_LR_" + str(learning_rate) + "_WM_" + "_".join(weight_mod) + \
-           "model_" + str(model_type).split(" ")[1] + "_less_params_all_12"
+           "_model_" + str(model_type).split(" ")[1] + "_less_params_all_12"
 
 dropout = None
 if dropout:
@@ -123,10 +123,6 @@ y_train_dir = os.path.join(data_dir, "y_train")
 # Validation
 X_val_dir = os.path.join(data_dir, "X_val")
 y_val_dir = os.path.join(data_dir, "y_val")
-
-# Test
-X_val_dir = os.path.join(data_dir, "X_test")
-y_val_dir = os.path.join(data_dir, "y_test")
 
 
 # Create color palette

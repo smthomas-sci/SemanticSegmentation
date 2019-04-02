@@ -6,7 +6,7 @@ Implementation of whole image prediction with variable overlap.
 """
 
 from seg_utils import *
-from seg_models import ResNet_UNet, ResNet_UNet_ExtraConv
+from seg_models import ResNet_UNet, ResNet_UNet_ExtraConv, ResNet_UNet_Dropout
 
 from numpy.random import seed
 from tensorflow import set_random_seed
@@ -19,14 +19,9 @@ num_classes = 12
 gpus = 1
 
 # Import model
-model = ResNet_UNet_ExtraConv(num_classes=num_classes)
+model = ResNet_UNet_Dropout(num_classes=num_classes, dropout=0.5)
 
-# Load weights
-if gpus == 2:
-    load_multigpu_checkpoint_weights(model, "./weights/100_Images_BS_24_PS_512_C_12_FT_False_E_100_LR_0.0001_WM_F_Checkpoint_E_20.h5")
-else:
-    model.load_weights("./weights/2x_n_290_BS_3_PS_512_C_12_FT_False_E_30_LR_0.0001_WM_F_checkpoint_010.h5")
-
+model.load_weights("/home/simon/Desktop/2x_Experiments_Aug/weights/2x_290_BS_12_PS_512_C_12_FT_True_E_5_LR_1e-06_WM_F_model_ResNet_UNet_Dropout_less_params_all_32_seed_3_DO_0.5.h5")
 
 # Create Keras function instead of model - helps with Learning Phase errors
 model_in = model.layers[0].get_input_at(0)
@@ -56,16 +51,14 @@ colors = [color_dict[key] for key in color_dict.keys()]
 base_dir = "/home/simon/Documents/PhD/Data/Histo_Segmentation/Datasets_n290/2x/Images/"
 #fnames = os.listdir(base_dir)
 
-
-with open("/home/simon/Documents/PhD/Data/Histo_Segmentation/Datasets_n290/2x/TrainingData/2x_n_290/test_files.txt", "r") as fh:
+with open("/home/simon/Desktop/2x_Experiments_Aug/test_files.txt", "r") as fh:
     fnames = [line.strip() + ".tif" for line in fh.readlines()]
 
 files = [ base_dir + name for name in fnames]
 
+output_directory = "/home/simon/Desktop/2x_Experiments_Aug/ALL_IMAGES/"
 
-output_directory = "/home/simon/Desktop/Outs/Masks/"
-
-whole_image_predict(files, model, output_directory, colors, compare=False)
+whole_image_predict(files, model, output_directory, colors, compare=False, pad_val=100)
 
 
 

@@ -213,7 +213,7 @@ def ResNet_UNet(dim=512, num_classes=6):
     # Standard U-Net upsampling 512 -> 256 -> 128 -> 64
 
     # Upsampling 1 - 512
-    fs = 12
+    fs = 32
     up1 = UpSampling2D(size=(2,2))(res_out)
     up1_conv = Conv2D(fs, 2, activation = 'relu', padding = 'same',
                  kernel_initializer = 'he_normal')(up1)
@@ -226,7 +226,7 @@ def ResNet_UNet(dim=512, num_classes=6):
                    kernel_initializer='he_normal')(merge1_conv1)
 
     # Upsampling 2 - 256
-    fs = 12
+    fs = 32
     up2 = UpSampling2D(size = (2,2))(merge1_conv2)
     up2_conv = Conv2D(fs, 2, activation = 'relu', padding = 'same',
                  kernel_initializer = 'he_normal')(up2)
@@ -238,7 +238,7 @@ def ResNet_UNet(dim=512, num_classes=6):
                    kernel_initializer = 'he_normal')(merge2_conv1)
 
     # Upsampling 3 & 4 - 128
-    fs = 12
+    fs = 32
     up3 = UpSampling2D(size = (2,2))(merge2_conv2)
     up3_conv1 = Conv2D(fs, 2, activation = 'relu', padding = 'same',
                  kernel_initializer = 'he_normal')(up3)
@@ -255,7 +255,7 @@ def ResNet_UNet(dim=512, num_classes=6):
                    kernel_initializer = 'he_normal')(merge3_conv1)
 
     # Upsample 5 - 64
-    fs = 12
+    fs = 32
     up5 = UpSampling2D(size = (2,2))(merge3_conv2)
     up5_conv = Conv2D(fs, 2, activation = 'relu', padding = 'same',
                   kernel_initializer = 'he_normal')(up5)
@@ -591,8 +591,7 @@ def ResNet_UNet_BN(dim=512, num_classes=6):
     return model
 
 
-
-def ResNet_UNet_Dropout(dim=512, num_classes=6):
+def ResNet_UNet_Dropout(dim=512, num_classes=6, dropout=0.5):
     """
     Returns a ResNet50 Nework with a U-Net
     like upsampling stage. Inlcudes skip connections
@@ -632,56 +631,60 @@ def ResNet_UNet_Dropout(dim=512, num_classes=6):
 
     # Standard U-Net upsampling 512 -> 256 -> 128 -> 64
 
-    # Upsampling 1
+    # Upsampling 1 - 512
+    fs = 32
     up1 = UpSampling2D(size=(2,2))(res_out)
-    up1_conv = Conv2D(512, 2, activation = 'relu', padding = 'same',
+    up1_conv = Conv2D(fs, 2, activation = 'relu', padding = 'same',
                  kernel_initializer = 'he_normal')(up1)
 
     prev_layer = resnet.get_layer("activation_40").output
     merge1 = concatenate([prev_layer,up1_conv], axis = 3)
-    merge1_conv1 = Conv2D(512, 3, activation = 'relu', padding = 'same',
+    merge1_conv1 = Conv2D(fs, 3, activation = 'relu', padding = 'same',
                    kernel_initializer = 'he_normal')(merge1)
-    merge1_conv2 = Conv2D(512, 3, activation = 'relu', padding = 'same',
+    merge1_conv2 = Conv2D(fs, 3, activation = 'relu', padding = 'same',
                    kernel_initializer = 'he_normal')(merge1_conv1)
 
-    # Upsampling 2
+    # Upsampling 2 - 256
+    fs = 32
     up2 = UpSampling2D(size = (2,2))(merge1_conv2)
-    up2_conv = Conv2D(256, 2, activation = 'relu', padding = 'same',
+    up2_conv = Conv2D(fs, 2, activation = 'relu', padding = 'same',
                  kernel_initializer = 'he_normal')(up2)
     prev_layer = resnet.get_layer("activation_22").output
     merge2 = concatenate([prev_layer,up2_conv], axis = 3)
-    merge2_conv1 = Conv2D(256, 3, activation = 'relu', padding = 'same',
+    merge2_conv1 = Conv2D(fs, 3, activation = 'relu', padding = 'same',
                    kernel_initializer = 'he_normal')(merge2)
-    merge2_conv2 = Conv2D(256, 3, activation = 'relu', padding = 'same',
+    merge2_conv2 = Conv2D(fs, 3, activation = 'relu', padding = 'same',
                    kernel_initializer = 'he_normal')(merge2_conv1)
 
-    # Upsampling 3 & 4
+    # Upsampling 3 & 4 - 128
+    fs = 32
     up3 = UpSampling2D(size = (2,2))(merge2_conv2)
-    up3_conv1 = Conv2D(128, 2, activation = 'relu', padding = 'same',
+    up3_conv1 = Conv2D(fs, 2, activation = 'relu', padding = 'same',
                  kernel_initializer = 'he_normal')(up3)
-    up3_conv2 = Conv2D(128, 2, activation = 'relu', padding = 'same',
+    up3_conv2 = Conv2D(fs, 2, activation = 'relu', padding = 'same',
                  kernel_initializer = 'he_normal')(up3_conv1)
     up4 = UpSampling2D(size = (2,2))(up3_conv2)
-    up4_conv = Conv2D(128, 2, activation = 'relu', padding = 'same',
+    up4_conv = Conv2D(fs, 2, activation = 'relu', padding = 'same',
                  kernel_initializer = 'he_normal')(up4)
     prev_layer = resnet.get_layer("activation_1").output
     merge3 = concatenate([prev_layer,up4_conv], axis = 3)
-    merge3_conv1 = Conv2D(128, 3, activation = 'relu', padding = 'same',
+    merge3_conv1 = Conv2D(fs, 3, activation = 'relu', padding = 'same',
                    kernel_initializer = 'he_normal')(merge3)
-    merge3_conv2 = Conv2D(128, 3, activation = 'relu', padding = 'same',
+    merge3_conv2 = Conv2D(fs, 3, activation = 'relu', padding = 'same',
                    kernel_initializer = 'he_normal')(merge3_conv1)
 
-    # Upsample 5
+    # Upsample 5 - 64
+    fs = 32
     up5 = UpSampling2D(size=(2,2))(merge3_conv2)
-    up5_conv = Conv2D(64, 2, activation = 'relu', padding = 'same',
+    up5_conv = Conv2D(fs, 2, activation = 'relu', padding = 'same',
                   kernel_initializer = 'he_normal')(up5)
-    merge5_conv1 = Conv2D(64, 3, activation = 'relu', padding = 'same',
+    merge5_conv1 = Conv2D(fs, 3, activation = 'relu', padding = 'same',
                     kernel_initializer = 'he_normal')(up5_conv)
-    merge5_conv2 = Conv2D(64, 3, activation = 'relu', padding = 'same',
+    merge5_conv2 = Conv2D(fs, 3, activation = 'relu', padding = 'same',
                     kernel_initializer = 'he_normal')(merge5_conv1)
 
     # Drop Out
-    do = SpatialDropout2D(0.5)(merge5_conv2)
+    do = SpatialDropout2D(dropout)(merge5_conv2)
     # Activation and reshape for training
     activation = Conv2D(num_classes, 1, activation = "softmax")(do)
     output = Reshape((dim*dim, num_classes))(activation)
@@ -693,7 +696,7 @@ def ResNet_UNet_Dropout(dim=512, num_classes=6):
 
 
 
-def ResNet_UNet_Reg(dim=512, num_classes=6):
+def ResNet_UNet_Reg(dim=512, num_classes=6, reg=5e-4):
     """
     Returns a ResNet50 Nework with a U-Net
     like upsampling stage. Inlcudes skip connections
@@ -726,8 +729,6 @@ def ResNet_UNet_Reg(dim=512, num_classes=6):
     from keras.regularizers import l2
     from keras.applications.resnet50 import ResNet50
 
-    # Regularisation constant
-    reg = 1e-5
 
     # Import a headless ResNet50
     resnet = ResNet50(input_shape = (None, None, 3), include_top=False)
@@ -737,52 +738,56 @@ def ResNet_UNet_Reg(dim=512, num_classes=6):
 
     # Standard U-Net upsampling 512 -> 256 -> 128 -> 64
 
-    # Upsampling 1
+    # Upsampling 1 - 512
+    fs = 32
     up1 = UpSampling2D(size=(2,2))(res_out)
-    up1_conv = Conv2D(512, 2, activation = 'relu', padding = 'same',
+    up1_conv = Conv2D(fs, 2, activation = 'relu', padding = 'same',
                  kernel_initializer = 'he_normal', kernel_regularizer = l2(reg), bias_regularizer = l2(reg))(up1)
 
     prev_layer = resnet.get_layer("activation_40").output
     merge1 = concatenate([prev_layer,up1_conv], axis = 3)
-    merge1_conv1 = Conv2D(512, 3, activation = 'relu', padding = 'same',
+    merge1_conv1 = Conv2D(fs, 3, activation = 'relu', padding = 'same',
                    kernel_initializer = 'he_normal', kernel_regularizer = l2(reg), bias_regularizer = l2(reg))(merge1)
-    merge1_conv2 = Conv2D(512, 3, activation = 'relu', padding = 'same',
+    merge1_conv2 = Conv2D(fs, 3, activation = 'relu', padding = 'same',
                    kernel_initializer = 'he_normal', kernel_regularizer = l2(reg), bias_regularizer = l2(reg))(merge1_conv1)
 
-    # Upsampling 2
+    # Upsampling 2 - 256
+    fs = 32
     up2 = UpSampling2D(size = (2,2))(merge1_conv2)
-    up2_conv = Conv2D(256, 2, activation = 'relu', padding = 'same',
+    up2_conv = Conv2D(fs, 2, activation = 'relu', padding = 'same',
                  kernel_initializer = 'he_normal', kernel_regularizer = l2(reg), bias_regularizer = l2(reg))(up2)
     prev_layer = resnet.get_layer("activation_22").output
     merge2 = concatenate([prev_layer,up2_conv], axis = 3)
-    merge2_conv1 = Conv2D(256, 3, activation = 'relu', padding = 'same',
+    merge2_conv1 = Conv2D(fs, 3, activation = 'relu', padding = 'same',
                    kernel_initializer = 'he_normal', kernel_regularizer = l2(reg), bias_regularizer = l2(reg))(merge2)
-    merge2_conv2 = Conv2D(256, 3, activation = 'relu', padding = 'same',
+    merge2_conv2 = Conv2D(fs, 3, activation = 'relu', padding = 'same',
                    kernel_initializer = 'he_normal', kernel_regularizer = l2(reg), bias_regularizer = l2(reg))(merge2_conv1)
 
-    # Upsampling 3 & 4
+    # Upsampling 3 & 4 - 128
+    fs = 32
     up3 = UpSampling2D(size = (2,2))(merge2_conv2)
-    up3_conv1 = Conv2D(128, 2, activation = 'relu', padding = 'same',
+    up3_conv1 = Conv2D(fs, 2, activation = 'relu', padding = 'same',
                  kernel_initializer = 'he_normal', kernel_regularizer = l2(reg), bias_regularizer = l2(reg))(up3)
-    up3_conv2 = Conv2D(128, 2, activation = 'relu', padding = 'same',
+    up3_conv2 = Conv2D(fs, 2, activation = 'relu', padding = 'same',
                  kernel_initializer = 'he_normal', kernel_regularizer = l2(reg), bias_regularizer = l2(reg))(up3_conv1)
     up4 = UpSampling2D(size = (2,2))(up3_conv2)
-    up4_conv = Conv2D(128, 2, activation = 'relu', padding = 'same',
+    up4_conv = Conv2D(fs, 2, activation = 'relu', padding = 'same',
                  kernel_initializer = 'he_normal', kernel_regularizer = l2(reg), bias_regularizer = l2(reg))(up4)
     prev_layer = resnet.get_layer("activation_1").output
     merge3 = concatenate([prev_layer,up4_conv], axis = 3)
-    merge3_conv1 = Conv2D(128, 3, activation = 'relu', padding = 'same',
+    merge3_conv1 = Conv2D(fs, 3, activation = 'relu', padding = 'same',
                    kernel_initializer = 'he_normal', kernel_regularizer = l2(reg), bias_regularizer = l2(reg))(merge3)
-    merge3_conv2 = Conv2D(128, 3, activation = 'relu', padding = 'same',
+    merge3_conv2 = Conv2D(fs, 3, activation = 'relu', padding = 'same',
                    kernel_initializer = 'he_normal', kernel_regularizer = l2(reg), bias_regularizer = l2(reg))(merge3_conv1)
 
-    # Upsample 5
+    # Upsample 5 - 64
+    fs = 32
     up5 = UpSampling2D(size=(2,2))(merge3_conv2)
-    up5_conv = Conv2D(64, 2, activation = 'relu', padding = 'same',
+    up5_conv = Conv2D(fs, 2, activation = 'relu', padding = 'same',
                   kernel_initializer = 'he_normal', kernel_regularizer = l2(reg), bias_regularizer = l2(reg))(up5)
-    merge5_conv1 = Conv2D(64, 3, activation = 'relu', padding = 'same',
+    merge5_conv1 = Conv2D(fs, 3, activation = 'relu', padding = 'same',
                     kernel_initializer = 'he_normal', kernel_regularizer = l2(reg), bias_regularizer = l2(reg))(up5_conv)
-    merge5_conv2 = Conv2D(64, 3, activation = 'relu', padding = 'same',
+    merge5_conv2 = Conv2D(fs, 3, activation = 'relu', padding = 'same',
                     kernel_initializer = 'he_normal', kernel_regularizer = l2(reg), bias_regularizer = l2(reg))(merge5_conv1)
 
 
@@ -796,24 +801,90 @@ def ResNet_UNet_Reg(dim=512, num_classes=6):
     return model
 
 
+def UNet(dim=512, num_classes=12):
+    """
+    Standard U-Net architecture for segmentation
+    """
+
+    from keras.models import Model
+    from keras.layers import Input
+    from keras.layers import Conv2D, SpatialDropout2D, MaxPool2D
+    from keras.layers import UpSampling2D, Reshape, concatenate
+    from keras.regularizers import l2
 
 
+    input = Input(shape=(None, None, 3))
 
+    # Down 1
+    fs = 64
+    conv1 = Conv2D(fs, 3, activation="relu", padding="same")(input)
+    conv2 = Conv2D(fs, 3, activation="relu", padding="same")(conv1)
+    pool1 = MaxPool2D((2, 2))(conv2)
 
+    # Down 2
+    fs = 128
+    conv3 = Conv2D(fs, 3, activation="relu", padding="same")(pool1)
+    conv4 = Conv2D(fs, 3, activation="relu", padding="same")(conv3)
+    pool2 = MaxPool2D((2, 2))(conv4)
 
+    # Down 3
+    fs = 256
+    conv5 = Conv2D(fs, 3, activation="relu", padding="same")(pool2)
+    conv6 = Conv2D(fs, 3, activation="relu", padding="same")(conv5)
+    pool3 = MaxPool2D((2, 2))(conv6)
 
+    # Down 4
+    fs = 512
+    conv7 = Conv2D(fs, 3, activation="relu", padding="same")(pool3)
+    conv8 = Conv2D(fs, 3, activation="relu", padding="same")(conv7)
+    pool4 = MaxPool2D((2, 2))(conv8)
 
+    # Bottom
+    fs = 1024
+    conv9 = Conv2D(fs, 3, activation="relu", padding="same")(pool4)
+    conv10 = Conv2D(fs, 3, activation="relu", padding="same")(conv9)
 
+    # Up 1
+    f2 = 512
+    up1 = UpSampling2D(size=(2,2))(conv10)
+    up1_merge = concatenate([up1, conv8], axis=3)
+    up1_conv1 = Conv2D(fs, 3, activation="relu", padding="same")(up1_merge)
+    up1_conv2 = Conv2D(fs, 3, activation="relu", padding="same")(up1_conv1)
 
+    # Up 2
+    fs = 256
+    up2 = UpSampling2D(size=(2, 2))(up1_conv2)
+    up2_merge = concatenate([up2, conv6], axis=3)
+    up2_conv1 = Conv2D(fs, 3, activation="relu", padding="same")(up2_merge)
+    up2_conv2 = Conv2D(fs, 3, activation="relu", padding="same")(up2_conv1)
 
+    # Up 3
+    fs = 128
+    up3 = UpSampling2D(size=(2, 2))(up2_conv2)
+    up3_merge = concatenate([up3, conv4], axis=3)
+    up3_conv1 = Conv2D(fs, 3, activation="relu", padding="same")(up3_merge)
+    up3_conv2 = Conv2D(fs, 3, activation="relu", padding="same")(up3_conv1)
 
+    # Up 4
+    fs = 64
+    up4 = UpSampling2D(size=(2, 2))(up3_conv2)
+    up4_merge = concatenate([up4, conv2], axis=3)
+    up4_conv1 = Conv2D(fs, 3, activation="relu", padding="same")(up4_merge)
+    up4_conv2 = Conv2D(fs, 3, activation="relu", padding="same")(up4_conv1)
 
+    # Activation and reshape for training
+    if num_classes > 2:
+        activation = Conv2D(num_classes, 1, activation="softmax")(up4_conv2)
+        output = Reshape((dim * dim, num_classes))(activation)
 
+    else:
+        activation = Conv2D(1, 1, activation="sigmoid")(up4_conv2)
+        output = Reshape((dim * dim, 1))(activation)
 
+    # Build model
+    model = Model(inputs=[input], outputs=[output])
 
-
-
-
+    return model
 
 # ---------------------------------------------------------------------------- #
 def ResNet_UNet_Generator(dim=512, num_classes=6):
@@ -964,9 +1035,9 @@ def ResNet_UNet_Descriminator(dim=512, num_classes=12):
 
 if __name__ == "__main__":
 
-    dim = 512
-    num_classes = 20
-    model = ResNet_UNet(dim, num_classes)
+    dim = 256
+    num_classes = 2
+    model = UNet(dim, num_classes)
     model.summary()
 
 

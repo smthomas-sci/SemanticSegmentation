@@ -12,13 +12,12 @@ Last Update: 11/03/19
 
 import argparse
 
-
 from keras.optimizers import Adam
-from keras.utils.training_utils import multi_gpu_model
-
 
 from seg_utils import *
-from seg_models import ResNet_UNet, ResNet_UNet_ExtraConv
+from seg_models import ResNet_UNet, ResNet_UNet_Dropout
+
+from sklearn.metrics import roc_curve, auc
 
 from numpy.random import seed as set_np_seed
 from tensorflow import set_random_seed as set_tf_seed
@@ -37,6 +36,7 @@ parser.add_argument("--weights", type=str, default=None, help="Path to pre-train
 parser.add_argument("--dim", type=int, default=512, help="Patch size - Note: >512 may cause memory issues")
 parser.add_argument("--num_classes", type=int, default=12, help="Number of classes to classify")
 parser.add_argument("--data", type=str, default="./data/", help="Path to data directory")
+parser.add_argument("--set", type=str, default="val", help="Path to data directory")
 args = parser.parse_args()
 
 # Assign to global names
@@ -46,6 +46,7 @@ weights = args.weights
 dim = args.dim
 num_classes = args.num_classes
 data_dir = args.data
+data_set = args.set
 
 print("[INFO] - EVALUATION RUN")
 print("[INF0] - random seed -", seed)
@@ -56,11 +57,11 @@ print("Weights:", weights)
 print("Patch Dim:", dim)
 print("Num Classes:", num_classes)
 print("Data:", data_dir)
-
+print("Set:", data_set)
 
 # Path & Directory Setup
-X_eval_dir = os.path.join(data_dir, "X_train")
-y_eval_dir = os.path.join(data_dir, "y_train")
+X_eval_dir = os.path.join(data_dir, "X_" + data_set)
+y_eval_dir = os.path.join(data_dir, "y_" + data_set)
 
 
 # Create color palette
@@ -81,7 +82,7 @@ color_dict = {
 
 # Create color and palette for generators
 classes = list(color_dict.keys())
-colors = [color_dict[key] for key in color_dict.keys()]
+colors = [color_dict[key] for key in classes]
 palette = Palette(colors)
 
 # Create generator
@@ -120,6 +121,9 @@ print("Loss:", results[0], "Acc:", results[1], "Weighted Acc:", results[-1])
 # Confusion Matrix
 epoch_cm = np.zeros((len(classes), len(classes)))
 
+# ROC Analysis
+ROC = {}
+
 # Loop through validation set
 for n in range(eval_gen.n // eval_gen.batch_size):
 
@@ -130,6 +134,20 @@ for n in range(eval_gen.n // eval_gen.batch_size):
 
     # Make prediction with model
     y_pred = model.predict(X)
+
+    # Calculate ROC values
+    for idx, tissue_type in enumerate(classes):
+        # Get scores
+        true = np.ravel(y_true[:, :, idx])
+        pred = np.ravel(y_pred[:, :, idx])
+
+        # Save to disk
+        folder = "./ROC/" + tissue_type
+        os.system("mkdir -p " + folder)
+        fname = folder + "/" + str(n) + "_true"
+        np.save(fname, true)
+        fname = folder + "/" + str(n) + "_pred"
+        np.save(fname, pred)
 
     # Find highest classes prediction
     y_true = np.argmax(y_true, axis=-1)
@@ -159,14 +177,25 @@ row_sums = epoch_cm.sum(axis=1)
 matrix = np.round(epoch_cm / row_sums[:, np.newaxis], 3)
 
 # Set up colors
+# Set up colors
 color = [255, 118, 25]
 orange = [c / 255. for c in color]
-white_orange = LinearSegmentedColormap.from_list("", ["white", orange])
+pink = [ c / 255. for c in [235, 66, 244]]
+purple = [c / 255. for c in [209, 66, 244]]
 
+white_orange = LinearSegmentedColormap.from_list("", ["white", orange])
+white_pink = LinearSegmentedColormap.from_list("", ["white", pink])
+white_purple = LinearSegmentedColormap.from_list("", ["white", purple])
+
+# Plot
 fig = plt.figure(figsize=(12, 14))
-ax = fig.add_subplot(111)
-cax = ax.matshow(matrix, interpolation='nearest', cmap=white_orange)
-fig.colorbar(cax)
+ax = plt.gca()
+im = ax.matshow(matrix, interpolation='nearest', cmap=white_purple)
+
+divider = make_axes_locatable(ax)
+cax = divider.append_axes("right", size="5%", pad=0.2)
+plt.colorbar(im, cax=cax)
+
 
 ax.set_xticklabels([''] + classes, fontsize=8)
 ax.set_yticklabels([''] + classes, fontsize=8)
@@ -175,51 +204,59 @@ ax.set_yticklabels([''] + classes, fontsize=8)
 ax.xaxis.set_major_locator(MultipleLocator(1))
 ax.yaxis.set_major_locator(MultipleLocator(1))
 
-ax.set_title("Recall - " + X_eval_dir)
-ax.set_ylabel("Ground Truth")
-ax.set_xlabel("Predicted")
+#ax.set_title("Recall - " + X_eval_dir)
+ax.set_ylabel("Ground Truth", fontsize=15)
+ax.set_xlabel("Predicted", fontsize=15)
 
 for i in range(len(classes)):
     for j in range(len(classes)):
         ax.text(j - 0.1, i, str(matrix[i, j]), fontsize=8)
 
-plt.savefig("/clusterdata/s4200058/train_CM.png", format="png")
 
+out_dir = "/clusterdata/s4200058/"
+out_dir = "/home/simon/Desktop/"
+plt.savefig( out_dir + data_set + "_CM.png", format="png")
 plt.close(fig)
 
 # Save CM
-# fname = "/home/simon/Desktop/CMs/CM.np"
-# print("Saving CM to", fname)
-# np.save(fname, epoch_cm)
-
-print("Finished.")
+fname = out_dir + "CM"
+print("Saving CM to", fname)
+np.save(fname, epoch_cm)
 
 
 # ------------ #
 # ROC ANALYSIS
 # ------------ #
 
-# Create ROC curves for all tissue types
-#     ROC = {}
-#     for tissue_class in color_dict.keys():
-#         # Get class index
-#         class_idx = colors.index(color_dict[tissue_class])
-#
-#         true = np.ravel(true_map[:, :, class_idx])
-#         pred = np.ravel(prob_map[:, :, class_idx])
-#
-          # Pickle true and pred for later...
+for tissue_type in classes:
+    path = os.path.join("./ROC/", tissue_type)
 
-#         # Get FPR and TPR
-#         fpr, tpr, thresholds = roc_curve(true, pred)
-#         roc_auc = auc(fpr, tpr)
-#         if np.isnan(roc_auc):
-#             # class not present
-#             continue
-#         # Update values
-#         ROC[tissue_class] = {"AUC": roc_auc, "TPR": tpr, "FPR": fpr, "raw_data": (true, pred)}
-#
-#     return ROC
+    # Initialise arrays
+    true = np.array([])
+    pred = np.array([])
 
+    # Load in files
+    for n in range(eval_gen.n // eval_gen.batch_size):
+        # Load true files
+        file = os.path.join(path, str(n) + "_true.npy")
+        true = np.append(true, np.load(file, mmap_mode="r"))
 
+        # Load pred files
+        file = os.path.join(path, str(n) + "_pred.npy")
+        pred = np.append(pred, np.load(file, mmap_mode="r"))
+
+    # Calculate ROC
+    fpr, tpr, thresholds = roc_curve(true, pred)
+    roc_auc = auc(fpr, tpr)
+
+    plt.plot(fpr, tpr)
+    plt.xlabel("FPR")
+    plt.ylabel("TPR")
+    plt.title(tissue_type + " - AUC: " + str(roc_auc))
+    plt.savefig(out_dir + tissue_type + "_ROC.png", format="png")
+    plt.close()
+
+    del true, pred
+
+print("Finished.")
 

@@ -10,6 +10,8 @@ from numpy.random import shuffle
 parser = argparse.ArgumentParser(description="Create training set of patches from n images")
 parser.add_argument("-n", type=int, default=1, help="Number of images in training set")
 parser.add_argument("--base_dir", type=str, default="./data/", help="Path to data directory")
+parser.add_argument("--split", type=float, default=0.8, help="Percent split")
+parser.add_argument("--dim", type=int, default=512, help="Dimension of patches")
 args = parser.parse_args()
 
 # Patient doubles
@@ -53,13 +55,11 @@ DOUBLES = [
 # Assign to global names
 base_dir = args.base_dir
 num_files = args.n
-
-
-# Data split
-split = 0.9
+split = args.split
+dim = args.dim
 
 # Directory setup
-patch_dir = os.path.join(base_dir, "Patches_Overlapped_256")
+patch_dir = os.path.join(base_dir, "Patches_Overlapped_" + str(dim))
 training_dir = os.path.join(base_dir, "TrainingData_" + str(int(split*100)))
 cmd = "mkdir -p " + training_dir
 os.system(cmd)

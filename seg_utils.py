@@ -29,6 +29,7 @@ from matplotlib.ticker import MultipleLocator
 from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.colors as cols
 from matplotlib.pyplot import Normalize
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from keras.callbacks import Callback, TensorBoard
 from keras.models import Model
@@ -660,16 +661,26 @@ def calculate_tile_size(image_shape, lower=50, upper=150):
 
         threshold - calculated overlap for tile and input image
     """
-    dims = [x*(2**5) for x in range(16, 45)]
+
+    def smallest_non_zero(values, threshold=10):
+        for tile, overlap in values:
+            if overlap > threshold:
+                return tile, overlap
+
+    dims = [x*(2**5) for x in range(6, 45)]
     w = image_shape[1]
     h = image_shape[0]
     thresholds = {}
     for d in dims:
         w_steps = w // d
+        if w_steps == 0:
+            continue
         w_overlap = (d - (w % d)) // w_steps
         h_steps = h // d
+        if h_steps == 0:
+            continue
         h_overlap = (d - (h % d)) // h_steps
-        # Threshold is the half the minimum overlap
+        # Threshold is half the minimum overlap
         thresholds[d] = min(w_overlap, h_overlap) // 2
     # Loop through pairs and take first that satisfies
     sorted_thresholds = sorted(thresholds.items(), key=lambda x: x[1])
@@ -677,11 +688,11 @@ def calculate_tile_size(image_shape, lower=50, upper=150):
         if lower < t < upper:
                 return w, h, d, t  # dim, threshold
     # Else - get largest overlap value
-    print("[INFO] - title overlap threshold not met. Defaulting to largest.")
-    return w, h, sorted_thresholds[-1][0], sorted_thresholds[-1][1]
+    print("[INFO] - title overlap threshold not met. Defaulting to Smallest non-zero overlap")
+    return w, h, smallest_non_zero(sorted_thresholds, threshold=10)
 
 
-def whole_image_predict(files, model, output_directory, colors, compare=True):
+def whole_image_predict(files, model, output_directory, colors, compare=True, pad_val=50):
     """
     Generates a segmentation mask for each of the images in files
     and saves them in the output directory.
@@ -714,6 +725,10 @@ def whole_image_predict(files, model, output_directory, colors, compare=True):
             # Load image
             histo = load_image(file, pre=True)
 
+            # Pad image with minimum threshold
+            # https://stackoverflow.com/questions/35751306/python-how-to-pad-numpy-array-with-zeros
+            histo = np.pad(histo, [(pad_val, pad_val),(pad_val, pad_val), (0, 0)], mode="constant", constant_values=0.99)
+
             # Create canvas to add predictions
             canvas = np.zeros_like(histo)
 
@@ -722,7 +737,6 @@ def whole_image_predict(files, model, output_directory, colors, compare=True):
 
             print("Tile size:", dim)
             print("Tile threshold:", threshold)
-
 
         except Exception as e:
             print("Failed to process:", name, e, file=stderr)
@@ -737,6 +751,7 @@ def whole_image_predict(files, model, output_directory, colors, compare=True):
         w_x, w_y = 0, dim
         h_x, h_y = 0, dim
 
+
         # Loop through all tiles and predict
         step = 1
         for i in range(h_steps + 1):
@@ -750,10 +765,9 @@ def whole_image_predict(files, model, output_directory, colors, compare=True):
                 tile = histo[h_x:h_y, w_x:w_y, :][np.newaxis, ::]
 
                 # Check and correct shape
-                orig_shape = tile[0].shape
+                orig_shape = tile.shape
                 if tile.shape != (dim, dim, 3):
                     tile = resize(tile[0], dsize=(dim, dim))[np.newaxis, ::]
-
                 # Predict
                 probs = model([tile])[0]
                 class_pred = np.argmax(probs[0], axis=-1)
@@ -762,9 +776,8 @@ def whole_image_predict(files, model, output_directory, colors, compare=True):
 
                 # Add prediction to canvas
                 canvas[h_x + threshold: h_y - threshold,
-                       w_x + threshold: w_y - threshold, :] = segmentation[threshold:-threshold,
-                                                                           threshold:-threshold, :]
-
+                           w_x + threshold: w_y - threshold, :] = segmentation[threshold:-threshold,
+                                                                               threshold:-threshold, :]
                 # Update column positions
                 w_x += dim - w_overlap
                 w_y += dim - w_overlap
@@ -775,19 +788,25 @@ def whole_image_predict(files, model, output_directory, colors, compare=True):
             w_x, w_y = 0, dim
 
         # Save Segmentation
-        fname = output_directory + name + "_WSI_" + str(dim) + "px.png"
+        #fname = output_directory + name + "_WSI_" + str(dim) + "px.png"
+        fname = output_directory + name + ".png"
 
+        # Crop canvas by removing padding
+        canvas = canvas[pad_val:-pad_val, pad_val:-pad_val, :]
 
         if compare:
             # Load in ground truth
             file = "/".join(file.split("/")[0:-2]) + "/Masks/" + name + ".png"
             mask = io.imread(file)
-            fig, axes = plt.subplots(1, 2, figsize=(20, 20))
+            fig, axes = plt.subplots(1, 2, figsize=(12, 8), frameon=False)
             axes[0].imshow(mask)
             axes[0].set_title("Ground Truth")
+            axes[0].set_axis_off()
             axes[1].imshow(canvas)
             axes[1].set_title("Predicted")
-            plt.savefig(fname)
+            axes[1].set_axis_off()
+            plt.tight_layout()
+            plt.savefig(fname, dpi=300)
             plt.close()
             # Wipe canvas from memory
             del canvas
