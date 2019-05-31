@@ -427,7 +427,7 @@ def load_image(fname, pre=True):
 
         im - image as numpy array
     """
-    im = io.imread(fname).astype("float32")
+    im = io.imread(fname).astype("float32")[:, :, 0:3]
     if pre:
             im /= 255.
             im -= 0.5
@@ -692,7 +692,7 @@ def calculate_tile_size(image_shape, lower=50, upper=150):
     return w, h, smallest_non_zero(sorted_thresholds, threshold=10)
 
 
-def whole_image_predict(files, model, output_directory, colors, compare=True, pad_val=50):
+def whole_image_predict(files, model, output_directory, colors, compare=True, pad_val=50, prob_map=False):
     """
     Generates a segmentation mask for each of the images in files
     and saves them in the output directory.
@@ -730,7 +730,10 @@ def whole_image_predict(files, model, output_directory, colors, compare=True, pa
             histo = np.pad(histo, [(pad_val, pad_val),(pad_val, pad_val), (0, 0)], mode="constant", constant_values=0.99)
 
             # Create canvas to add predictions
-            canvas = np.zeros_like(histo)
+            if prob_map:
+                canvas = np.zeros((histo.shape[0],histo.shape[1], len(colors)))
+            else:
+                canvas = np.zeros_like(histo)
 
             # Tile info
             w, h, dim, threshold = calculate_tile_size(histo.shape, lower=50, upper=100)
@@ -766,17 +769,33 @@ def whole_image_predict(files, model, output_directory, colors, compare=True, pa
 
                 # Check and correct shape
                 orig_shape = tile.shape
-                if tile.shape != (dim, dim, 3):
-                    tile = resize(tile[0], dsize=(dim, dim))[np.newaxis, ::]
-                # Predict
-                probs = model([tile])[0]
-                class_pred = np.argmax(probs[0], axis=-1)
 
-                segmentation = apply_color_map(colors, class_pred)
 
-                # Add prediction to canvas
-                canvas[h_x + threshold: h_y - threshold,
-                           w_x + threshold: w_y - threshold, :] = segmentation[threshold:-threshold,
+                if prob_map:
+
+                    if tile.shape != (dim, dim, len(colors)):
+                        tile = resize(tile[0], dsize=(dim, dim))[np.newaxis, ::]
+                    # Predict
+                    probs = model([tile])[0]
+
+                    # Add prediction to canvas
+                    canvas[h_x + threshold: h_y - threshold,
+                                w_x + threshold: w_y - threshold, :] = probs[0][threshold:-threshold,
+                                                                                threshold:-threshold, :]
+                else:
+
+                    if tile.shape != (dim, dim, 3):
+                        tile = resize(tile[0], dsize=(dim, dim))[np.newaxis, ::]
+                    # Predict
+                    probs = model([tile])[0]
+
+                    class_pred = np.argmax(probs[0], axis=-1)
+
+                    segmentation = apply_color_map(colors, class_pred)
+
+                    # Add prediction to canvas
+                    canvas[h_x + threshold: h_y - threshold,
+                            w_x + threshold: w_y - threshold, :] = segmentation[threshold:-threshold,
                                                                                threshold:-threshold, :]
                 # Update column positions
                 w_x += dim - w_overlap
@@ -788,7 +807,6 @@ def whole_image_predict(files, model, output_directory, colors, compare=True, pa
             w_x, w_y = 0, dim
 
         # Save Segmentation
-        #fname = output_directory + name + "_WSI_" + str(dim) + "px.png"
         fname = output_directory + name + ".png"
 
         # Crop canvas by removing padding
@@ -809,6 +827,11 @@ def whole_image_predict(files, model, output_directory, colors, compare=True, pa
             plt.savefig(fname, dpi=300)
             plt.close()
             # Wipe canvas from memory
+            del canvas
+
+        elif prob_map:
+            file = fname.split(".")[0] + ".npy"
+            np.save(file, canvas)
             del canvas
 
         else:

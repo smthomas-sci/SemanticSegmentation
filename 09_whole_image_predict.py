@@ -21,7 +21,7 @@ gpus = 1
 # Import model
 model = ResNet_UNet_Dropout(num_classes=num_classes, dropout=0.5)
 
-model.load_weights("/home/simon/Desktop/2x_Experiments_Aug/weights/2x_290_BS_12_PS_512_C_12_FT_True_E_5_LR_1e-06_WM_F_model_ResNet_UNet_Dropout_less_params_all_32_seed_3_DO_0.5.h5")
+model.load_weights("/home/simon/Desktop/10x_Experiments_Over_Aug/weights/10x_290_Over_Aug_BS_24_PS_256_C_12_FT_True_E_5_LR_1e-06_WM_F_model_ResNet_UNet_Dropout_less_params_all_32_seed_1_DO_0.5_checkpoint_001.h5")
 
 # Create Keras function instead of model - helps with Learning Phase errors
 model_in = model.layers[0].get_input_at(0)
@@ -48,17 +48,17 @@ color_dict = {
 colors = [color_dict[key] for key in color_dict.keys()]
 
 
-base_dir = "/home/simon/Documents/PhD/Data/Histo_Segmentation/Datasets_n290/2x/Images/"
+base_dir = "/home/simon/Documents/PhD/Data/Histo_Segmentation/Datasets_n290/10x/Images/"
 #fnames = os.listdir(base_dir)
 
-with open("/home/simon/Desktop/2x_Experiments_Aug/test_files.txt", "r") as fh:
+with open("/home/simon/Desktop/10x_Experiments_Over_Aug/train_files.txt", "r") as fh:
     fnames = [line.strip() + ".tif" for line in fh.readlines()]
 
 files = [ base_dir + name for name in fnames]
 
-output_directory = "/home/simon/Desktop/2x_Experiments_Aug/ALL_IMAGES/"
+output_directory = "/home/simon/Desktop/10x_Experiments_Over_Aug/ALL_PROBMAPS/"
 
-whole_image_predict(files, model, output_directory, colors, compare=False, pad_val=100)
+whole_image_predict(files, model, output_directory, colors, compare=False, pad_val=100, prob_map=True)
 
 
 
