@@ -591,7 +591,7 @@ def ResNet_UNet_BN(dim=512, num_classes=6):
     return model
 
 
-def ResNet_UNet_Dropout(dim=512, num_classes=6, dropout=0.5):
+def ResNet_UNet_Dropout(dim=512, num_classes=6, dropout=0.5, final_activation=True):
     """
     Returns a ResNet50 Nework with a U-Net
     like upsampling stage. Inlcudes skip connections
@@ -686,7 +686,10 @@ def ResNet_UNet_Dropout(dim=512, num_classes=6, dropout=0.5):
     # Drop Out
     do = SpatialDropout2D(dropout)(merge5_conv2)
     # Activation and reshape for training
-    activation = Conv2D(num_classes, 1, activation = "softmax")(do)
+    if final_activation:
+        activation = Conv2D(num_classes, 1, activation="softmax")(do)
+    else:
+        activation = Conv2D(num_classes, 1, activation=None)(do)
     output = Reshape((dim*dim, num_classes))(activation)
 
     # Build model

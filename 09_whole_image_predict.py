@@ -49,6 +49,7 @@ colors = [color_dict[key] for key in color_dict.keys()]
 
 
 base_dir = "/home/simon/Documents/PhD/Data/Histo_Segmentation/Datasets_n290/10x/Images/"
+
 #fnames = os.listdir(base_dir)
 
 with open("/home/simon/Desktop/10x_Experiments_Over_Aug/train_files.txt", "r") as fh:
@@ -56,9 +57,10 @@ with open("/home/simon/Desktop/10x_Experiments_Over_Aug/train_files.txt", "r") a
 
 files = [ base_dir + name for name in fnames]
 
-output_directory = "/home/simon/Desktop/10x_Experiments_Over_Aug/ALL_PROBMAPS/"
+#output_directory = "/home/simon/Desktop/10x_Experiments_Over_Aug/ALL_PROBMAPS/"
+output_directory = "/home/simon/Desktop/terst/"
 
-whole_image_predict(files, model, output_directory, colors, compare=False, pad_val=100, prob_map=True)
+whole_image_predict(files, model, output_directory, colors, compare=False, pad_val=100, prob_map=False)
 
 
 

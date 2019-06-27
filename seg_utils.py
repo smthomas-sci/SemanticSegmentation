@@ -10,16 +10,23 @@ Author: Simon Thomas
 Email: simon.thomas@uq.edu.au
 
 Start Date: 24/10/18
-Last Update: 17/01/19
+Last Update: 24/06/19
 
 """
 
 import numpy as np
-from skimage import io
 from sys import stderr
 import h5py
 import os
 import io as IO
+
+import skimage.io as io
+from skimage.measure import regionprops
+from skimage.morphology import disk
+from skimage.transform import rotate
+from skimage.filters import median
+
+from sklearn.linear_model import LinearRegression
 
 
 from cv2 import resize, cvtColor, COLOR_RGB2BGR, imwrite
@@ -1172,4 +1179,3 @@ class Validation(TensorBoard):
         return
 
 
-# ------------------------------------------------------------------------------------------ #
