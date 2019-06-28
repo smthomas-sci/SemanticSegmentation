@@ -14,6 +14,11 @@ Last Update: 04/02/19
 
 """
 
+# Required for custom layer / model
+from keras.layers import Softmax, Reshape, Layer
+from keras.initializers import Constant
+from keras.models import Model
+
 
 def VGG_UNet(dim, num_classes, channels=3):
     """
@@ -1034,6 +1039,49 @@ def ResNet_UNet_Descriminator(dim=512, num_classes=12):
     model = Model(discriminator_input, x)
 
     return model
+
+
+
+
+
+from keras.activations import softmax
+
+class TemperatureScaling(Layer):
+    def __init__(self, T=1, T_is_trainable=True, use_activation=False, **kwargs):
+        self.T = T
+        self.T_is_trainable = T_is_trainable
+        self.use_activation = use_activation
+        super(TemperatureScaling, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        # Create a trainable weight variable for this layer.
+        self.kernel = self.add_weight(name='T',
+                                      shape=(1,),
+                                      initializer=Constant(value=self.T),
+                                      trainable=self.T_is_trainable)
+        super(TemperatureScaling, self).build(input_shape)  # Be sure to call this at the end
+
+    def call(self, x):
+        if self.use_activation:
+            return softmax(x / self.kernel) # Cust
+        return x / self.kernel
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
+
+
+def generate_temperature_model(model, dim=256, T=1, trainable=True, extra_reshape=False):
+    # Add Temperature Scaling
+    inputs = model.get_input_at(0)
+    x = model.layers[-2].output
+    x = TemperatureScaling(T, trainable)(x)
+    x = Reshape((dim*dim, 12))(x)
+    activation = Softmax(axis=-1)(x)
+
+    if extra_reshape:
+        activation = Reshape((dim, dim, 12))(activation)
+
+    return Model(inputs=[inputs], outputs=[activation])
 
 
 if __name__ == "__main__":

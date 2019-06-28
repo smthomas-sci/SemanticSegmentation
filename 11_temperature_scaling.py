@@ -14,7 +14,7 @@ from seg_utils import *
 from seg_models import ResNet_UNet, ResNet_UNet_ExtraConv, ResNet_UNet_Dropout
 
 from keras.models import Model
-from keras.layers import Softmax, Lambda, Reshape, Layer
+from keras.layers import Softmax, Reshape, Layer
 from keras.initializers import Constant
 from keras.optimizers import Adam
 
@@ -106,8 +106,9 @@ def generate_temperature_model(model, dim=256, T=1, trainable=True):
     return Model(inputs=[inputs], outputs=[activation])
 
 
-# temp_model = generate_temperature_model(model)
+# temp_model = generate_temperature_model(model, dim=256, T=1, trainable=True)
 #
+# # Load weights
 # for layer in temp_model.layers[0:-3]:
 #    layer.trainable = False
 # temp_model.layers[-3].trainable = True
@@ -117,23 +118,23 @@ def generate_temperature_model(model, dim=256, T=1, trainable=True):
 temp_model = model
 temp_model.trainable = False
 
-# Compile model for training
-temp_model.compile(
-            optimizer=Adam(lr=0.05),
-            loss="categorical_crossentropy",
-            sample_weight_mode="temporal",
-            metrics=["accuracy"],
-            weighted_metrics=["accuracy"]
-            )
-
-
-
-# Train
-history = temp_model.fit_generator(
-                        epochs=1,
-                        generator=val_gen,
-                        steps_per_epoch=val_gen.n // val_gen.batch_size,
-                        )
+# # Compile model for training
+# temp_model.compile(
+#             optimizer=Adam(lr=0.05),
+#             loss="categorical_crossentropy",
+#             sample_weight_mode="temporal",
+#             metrics=["accuracy"],
+#             weighted_metrics=["accuracy"]
+#             )
+#
+#
+#
+# # Train
+# history = temp_model.fit_generator(
+#                         epochs=1,
+#                         generator=val_gen,
+#                         steps_per_epoch=val_gen.n // val_gen.batch_size,
+#                         )
 
 
 # ------------ CALIBRATION PLOT
@@ -220,13 +221,16 @@ def plot_accuracy_confidence(mean_p_of_all_ps, proportion_correct, ece):
     """
     Plots it
     """
+    import matplotlib.patches as mpatches
+    purple = (127 / 255., 63 / 255., 191 / 255.)
+
     plt.axes(axisbelow=True)
     plt.grid(ls="--")  # np.arange(0.05, 1.05, 0.1)
 
     # Mean argmax p for each bin
     plt.bar(np.arange(0, 1, 0.1), mean_p_of_all_ps,
             width=0.1, align="edge", color="red",
-            alpha=0.5, edgecolor="red",
+            alpha=0.5, edgecolor="black",
             label="Mean Output Confidence")
 
     # Proportion Correct
@@ -235,6 +239,7 @@ def plot_accuracy_confidence(mean_p_of_all_ps, proportion_correct, ece):
             alpha=0.5, edgecolor="black",
             label="Proportion Correct")
 
+    plt.plot(range(1), range(1), color=purple, label="Concordance")
     # Ideal output
     plt.plot([0, 1], [0, 1], color="lightgray", ls="--", lw=2)
 
@@ -243,13 +248,32 @@ def plot_accuracy_confidence(mean_p_of_all_ps, proportion_correct, ece):
     plt.ylabel("Accuracy")
     plt.margins(x=0)
     plt.margins(y=0)
-    plt.legend()
-    plt.show()
+
+    # Legend
+    red_patch = mpatches.Patch(color='red', label='Mean Confidence', alpha=0.5)
+    blue_patch = mpatches.Patch(color='blue', label='Accuracy', alpha=0.5)
+    purple_patch = mpatches.Patch(color=purple, label='Acc./Conf. Concordance')
+    legend = plt.legend(handles=[red_patch, blue_patch, purple_patch],
+               frameon=True, framealpha=1,
+               fancybox=None)
+    legend.get_frame().set_linewidth(0.0)
+    plt.savefig("/home/simon/Desktop/Validation_Uncalibrated.png", dpi=300)
+    #plt.show()
+    plt.close()
+
+
 
 # Run
 bin_means, proportion_correct, correct_hist, all_hist = tally_predictions(temp_model, val_gen)
 
-np.set_printoptions(precision=3)
+
+#temp_model.save_weights("/home/simon/Desktop/10x_Experiments_Over_Aug/weights/10x_temperature_scaled.h5")
+
+
+# T = temp_model.layers[-3].get_weights()[0][0]
+# print("T:", T)
+
+#np.set_printoptions(precision=3)
 print("Bin Means:", bin_means)
 print("Porpriont:", proportion_correct)
 print(correct_hist)
@@ -260,7 +284,7 @@ ece = calculate_ECE(bin_means, proportion_correct, all_hist)
 plot_accuracy_confidence(bin_means, proportion_correct, ece)
 
 # Get T parameter
-print("T:", temp_model.layers[-3].get_weights())
+
 
 
 
